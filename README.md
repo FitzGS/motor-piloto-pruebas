@@ -24,6 +24,9 @@ ssh -p 65002 fitz@178.156.144.236 consultar productos finotech-ve
 Las consultas admiten una página numérica opcional, desde cero, de hasta 50 filas.
 Se pueden consultar todas las tiendas excepto la privada de Luis. No hay SQL libre
 ni función de exportación; poder leer no impide copiar texto localmente.
+`llamadas` incluye `habilidades: piloto:<sha>` cuando intervino el motor, para
+relacionar versión, conversación, pedidos y consumo. `costos` resume los últimos
+30 días por modelo y fuente; los seguimientos mantienen sus límites actuales.
 
 Para publicar: hacer commit/push aquí y usar el SHA completo de 40 caracteres.
 
