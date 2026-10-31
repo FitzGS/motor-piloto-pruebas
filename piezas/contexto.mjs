@@ -101,6 +101,15 @@ export function resultadosRecientes(mensajes) {
   });
 }
 
+/**
+ * ¿La tienda cobra al recibir? El prompt de la plataforma lo marca con
+ * «**Se paga CONTRAENTREGA**» y define ahí mismo el texto del cierre
+ * («Pedido confirmado #0001 · Pagas $20 en efectivo cuando lo recibas 🚚»).
+ */
+export function cobraAlRecibir(system) {
+  return /\*\*Se paga CONTRAENTREGA\*\*/.test(String(system || ''));
+}
+
 /** ¿La tienda tiene esta herramienta activa en esta vuelta? */
 export function tieneHerramienta(herramientas, nombre) {
   return (herramientas || []).some((t) => t?.type === 'function' && t.function?.name === nombre);

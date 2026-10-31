@@ -14,10 +14,10 @@
 //   3. Lo que no es inequívoco → { tipo: 'actual' }: responde el agente de hoy.
 //   4. Misma respuesta 3 veces → actual.
 
-import { camposDelPrompt, paisDelPrompt, resultadosRecientes, systemDe, tieneHerramienta, ultimoDe, ultimoDelCliente, ultimoDelVendedor, vecesDicho, textoDe } from './contexto.mjs';
+import { camposDelPrompt, cobraAlRecibir, paisDelPrompt, resultadosRecientes, systemDe, tieneHerramienta, ultimoDe, ultimoDelCliente, ultimoDelVendedor, vecesDicho, textoDe } from './contexto.mjs';
 import { interpretar } from './interprete.mjs';
 import { revisar } from './guardias.mjs';
-import { PREGUNTA_CONFIRMAR, cambioTrasNo, pedirDatos, preciosPermitidos, preview } from './redactor.mjs';
+import { PREGUNTA_CONFIRMAR, cambioTrasNo, cierreContraentrega, pedirDatos, preciosPermitidos, preview } from './redactor.mjs';
 import { paisDe } from '../paises/index.mjs';
 import { normalizar } from './texto.mjs';
 
@@ -138,6 +138,39 @@ function siguientePaso({ borrador, pais, campos, yaPedidos, mensajes, system, po
 export function turnoDeVenta(contexto) {
   const borrador = contexto.borrador || {};
   const mensajes = contexto.mensajes || [];
+
+  // ── El cierre justo después de confirm_order ─────────────────────────
+  // Va primero: al volver de la herramienta el borrador ya está confirmado
+  // (lastPedidoLabel, etapa confirmed) y las salidas de abajo cederían. Solo
+  // en tiendas que cobran al recibir: ahí el cierre es un texto fijo de la
+  // plataforma y escribirlo por código ahorra el turno más caro de la venta.
+  // Con pago por adelantado (link, transferencia) lo sigue escribiendo el
+  // agente actual, que sabe ofrecer los métodos.
+  if (ultimoDe(mensajes).tipo === 'herramienta') {
+    const resultados = resultadosRecientes(mensajes);
+    const conf = resultados.find((r) => r.nombre === 'confirm_order');
+    if (conf && resultados.length === 1) {
+      const r = conf.resultado || {};
+      const label = String(r.pedidoLabel || '');
+      const total = Number(r.total);
+      if (r.ok === true && /^#\d{1,8}$/.test(label) && Number.isFinite(total) && total > 0 && cobraAlRecibir(systemDe(mensajes))) {
+        const t = cierreContraentrega({ pedidoLabel: label, total });
+        const rev = revisar({
+          texto: t,
+          contexto: {
+            preciosPermitidos: [Number(total.toFixed(2))],
+            numerosPermitidos: [],
+            correosPermitidos: [],
+            vecesDicho: (x) => vecesDicho(mensajes, x),
+          },
+        });
+        if (rev.texto) return { plan: { tipo: 'texto', texto: rev.texto }, porque: ['pedido creado: cierre contraentrega por código'] };
+        return actual(['pedido creado: el cierre no pasó las guardias', JSON.stringify(rev.traza)]);
+      }
+      return actual([r.ok ? 'pedido creado: cierre con el actual (no es contraentrega)' : 'confirm_order falló: lo resuelve el actual']);
+    }
+  }
+
   if (!ETAPAS_DEL_MOTOR.has(borrador.stage) || !(borrador.items || []).length) return actual([`etapa ${borrador.stage || 'sin borrador'}: no es del motor`]);
   if (borrador.lastPedidoLabel) return actual(['ya hay un pedido confirmado en este chat']);
 

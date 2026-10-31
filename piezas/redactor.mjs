@@ -73,6 +73,15 @@ export function preciosPermitidos(borrador) {
   return p.map((n) => Number(Number(n).toFixed(2)));
 }
 
+/**
+ * El cierre tras crear el pedido en una tienda que cobra al recibir. Es el
+ * texto que el prompt de la plataforma da como modelo: no hay nada que
+ * preguntar (el pago ya está definido), solo confirmar número y monto.
+ */
+export function cierreContraentrega({ pedidoLabel, total }) {
+  return `Pedido confirmado ${pedidoLabel} · Pagas ${formatearPrecio(total)} en efectivo cuando lo recibas 🚚`;
+}
+
 /** La previsualización: carrito + datos + UNA pregunta. */
 export function preview({ borrador, pais }) {
   const lineas = ['Te resumo el pedido 📝', '', ...lineasDelCarrito(borrador)];

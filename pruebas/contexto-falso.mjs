@@ -9,7 +9,7 @@ export const HERRAMIENTAS = [
 ].map((name) => ({ type: 'function', function: { name, parameters: { type: 'object', properties: {} } } }));
 
 /** El trozo del prompt de la plataforma que el motor lee. */
-export function systemFalso({ pais = 'EC', campos = null, yaPedidos = [], oficina = null } = {}) {
+export function systemFalso({ pais = 'EC', campos = null, yaPedidos = [], oficina = null, contraentrega = false } = {}) {
   const lista = campos || [
     ['Nombre y apellido', true], ['Teléfono de contacto', true], ['Cédula / documento', false],
     ['Dirección exacta (sector, calle y número)', true], ['Ciudad', true], ['Punto de referencia', false],
@@ -25,6 +25,7 @@ export function systemFalso({ pais = 'EC', campos = null, yaPedidos = [], oficin
     ...(yaPedidos.length ? [`- ⛔ **YA PEDISTE ${yaPedidos.join(', ')} en este chat y el cliente no lo dio. NO lo vuelvas a pedir.**`] : []),
     '- **Datos que tienes que recoger** (pide el que el cliente no haya dado):',
     ...lista.map(([l, ob]) => `   - **${l}** — ${ob ? '**OBLIGATORIO** (sin esto NO cierres el pedido)' : 'opcional (si no lo da tras 1 intento, sigue sin él)'}. Descripción.`),
+    ...(contraentrega ? ['- **Se paga CONTRAENTREGA**: el cliente paga en efectivo al mensajero cuando recibe el producto, NO antes.'] : []),
     '## ESTADO ACTUAL DEL CARRITO (sincronizado server-side)',
   ];
   return lineas.join('\n');

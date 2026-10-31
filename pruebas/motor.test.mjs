@@ -211,8 +211,26 @@ test('sin la herramienta confirm_order en esta vuelta → actual', async () => {
   assert.deepEqual(await motor(c), { tipo: 'actual' });
 });
 
-test('pedido creado (confirm_order ok) → el cierre lo escribe el actual', async () => {
+test('pedido creado SIN contraentrega → el cierre lo escribe el actual (sabe ofrecer los pagos)', async () => {
   const c = contextoFalso({ borrador: { ...listo, lastPedidoLabel: '#0042' }, historial: [m.cliente('sí'), m.llamada('confirm_order', {}), m.resultado({ ok: true, pedidoLabel: '#0042', pedidoNumber: 42, total: 39.99 })] });
+  assert.deepEqual(await motor(c), { tipo: 'actual' });
+});
+
+// Ronda 3 de simulaciones (31-oct-2026): el cierre tras confirm_order era el
+// turno más caro de la venta (~37.000 tokens, $0,003) para escribir un texto
+// fijo que la propia plataforma define en el prompt.
+test('pedido creado CON contraentrega → cierre por código, con el número y el total', async () => {
+  const c = contextoFalso({ system: { contraentrega: true }, borrador: { ...listo, stage: 'confirmed', lastPedidoLabel: '#0042' }, historial: [m.cliente('sí'), m.llamada('confirm_order', {}), m.resultado({ ok: true, pedidoLabel: '#0042', pedidoNumber: 42, total: 39.99 })] });
+  assert.deepEqual(await motor(c), { tipo: 'texto', texto: 'Pedido confirmado #0042 · Pagas $39,99 en efectivo cuando lo recibas 🚚' });
+});
+
+test('confirm_order rechazado (pedido duplicado) → actual, aunque sea contraentrega', async () => {
+  const c = contextoFalso({ system: { contraentrega: true }, borrador: listo, historial: [m.cliente('sí'), m.llamada('confirm_order', {}), m.resultado({ ok: false, hint: 'Este cliente YA tiene el pedido #0006' })] });
+  assert.deepEqual(await motor(c), { tipo: 'actual' });
+});
+
+test('confirm_order sin número de pedido válido → actual', async () => {
+  const c = contextoFalso({ system: { contraentrega: true }, borrador: listo, historial: [m.cliente('sí'), m.llamada('confirm_order', {}), m.resultado({ ok: true, total: 39.99 })] });
   assert.deepEqual(await motor(c), { tipo: 'actual' });
 });
 
