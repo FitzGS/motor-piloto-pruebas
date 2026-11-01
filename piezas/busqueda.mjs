@@ -44,7 +44,7 @@ buscar=false si saluda, agradece, dicta sus datos, confirma o rechaza algo, cont
 buscar=true, consulta=null y necesidad=true si NO nombra un producto concreto y en cambio describe una NECESIDAD, un USO, una CATEGORÍA o PARA QUIÉN es: "algo para grabar videos", "necesito algo para la cocina", "es para mi mamá", "un regalo", "qué tienen para niños", "y de tecnología qué tienen?".
 buscar=false si nombra DOS productos o más ("los audífonos y el aro de luz").
 
-consulta: las palabras del producto TAL COMO LAS DIJO, limpias y en singular, conservando el tipo o para qué es si lo dijo ("audífono bluetooth", "masajeador espalda"; no "unos audífonos buenos"). Nunca pongas un producto que el cliente no nombró. Si pide "el más barato" DE algo que le acabamos de mencionar, consulta = ese algo.
+consulta: las palabras del producto TAL COMO LAS DIJO, limpias y en singular, conservando el tipo o para qué es si lo dijo ("audífono bluetooth", "masajeador espalda"; no "unos audífonos buenos"). Nunca pongas un producto que el cliente no nombró. Si pide "el más barato" DE algo que le acabamos de mencionar, consulta = el TIPO de producto en una o dos palabras ("reloj inteligente", "audífono"), nunca el nombre completo del modelo.
 precio: si busca POR PRECIO ("algo de 20", "el más barato" = 0), ese número; si no, null.
 
 Responde SOLO este JSON, sin nada más: {"buscar": true|false, "consulta": "..."|null, "precio": número|null, "necesidad": true|false}`;
@@ -420,7 +420,15 @@ export function turnoDeBusqueda(contexto) {
     // «El más barato»: lo decide el código. La plataforma ya los manda del más
     // barato al más caro; se toma el de menor precio y va su ficha.
     if (pedido.precio === 0) {
-      const conPrecio = disponibles.filter((p) => precioDe(p));
+      // Solo entre los que SON lo pedido: «los audífonos más baratos» no es el
+      // bambú chino de $5 que la búsqueda trajo por la descripción (g14).
+      // …o de la MISMA categoría que esos: el «T900 Smart Watch» es un reloj
+      // aunque no se llame así, y comparte categoría con el «Reloj militar».
+      const porNombreTipo = pedido.query ? disponibles.filter((p) => esDeEseTipo(p.name, pedido.query)) : disponibles;
+      const categoriasDelTipo = new Set(porNombreTipo.map((p) => normalizar(p.category || '')).filter(Boolean));
+      const delTipo = pedido.query ? disponibles.filter((p) => esDeEseTipo(p.name, pedido.query) || (p.category && categoriasDelTipo.has(normalizar(p.category)))) : disponibles;
+      if (pedido.query && !delTipo.length) return actual([`por precio sin nada que sea «${pedido.query}»: lo lleva el actual`]);
+      const conPrecio = delTipo.filter((p) => precioDe(p));
       if (!conPrecio.length) return actual(['por precio sin precios: lo lleva el actual']);
       const barato = conPrecio.reduce((a, b) => (precioDe(b).valor < precioDe(a).valor ? b : a));
       if (fichasEnviadas(mensajes).has(String(barato.slug))) return actual([`el más barato (${barato.slug}) ya se enseñó: contesta el actual`]);
@@ -504,6 +512,16 @@ export function turnoDeBusqueda(contexto) {
     }
     if (d.consulta) argumentos.query = d.consulta;
     if (d.precio !== null) argumentos.precio = d.precio;
+    // «El más barato»: se busca por el TIPO (la palabra principal), no por el
+    // modelo entero («reloj militar inteligente con linterna» solo traía ese).
+    // Y «los más baratos» justo después de una ficha, sin nombrar nada, son
+    // los más baratos DE ESO: el tipo sale del slug de la ficha (g14).
+    if (d.precio === 0) {
+      const cabeza = (q) => normalizar(q).split(' ').find((w) => w.length >= 3 && !VACIAS.has(w)) || null;
+      const deLaFicha = fichasDelUltimoTurno(mensajes)[0];
+      const tipo = d.consulta ? cabeza(d.consulta) : deLaFicha ? cabeza(String(deLaFicha).replace(/-/g, ' ')) : null;
+      if (tipo) argumentos.query = tipo; else delete argumentos.query;
+    }
     return { plan: { tipo: 'herramientas', llamadas: [{ nombre: 'search_products', argumentos }] }, porque: [`buscar ${JSON.stringify(argumentos)}`] };
   }
 

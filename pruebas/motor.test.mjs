@@ -599,7 +599,8 @@ test('mirar opciones: frases', async () => {
 
 // ── Pasadas 10 a 13 de la tienda grande: lo que fallaba al elegir ─────────
 test('«el más barato» lo decide el código: ficha del de menor precio, no lista', async () => {
-  const productos = [producto('t900-30', 'T900 Smart Watch', 30), producto('t900-19', 'T900 Smart Watch Lite', 19), producto('militar', 'Reloj militar', 65)];
+  // El T900 no se llama «reloj», pero es de la misma categoría que el que sí.
+  const productos = [producto('t900-30', 'T900 Smart Watch', 30, { category: 'Tecnología' }), producto('t900-19', 'T900 Smart Watch Lite', 19, { category: 'Tecnología' }), producto('militar', 'Reloj militar', 65, { category: 'Tecnología' }), producto('bambu', 'Bambú chino', 5, { category: 'Otros' })];
   const c = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('cuál es el más barato?'), m.llamada('search_products', { query: 'reloj', precio: 0 }, ID_MOTOR), m.resultado({ ok: true, products: productos }, ID_MOTOR)] });
   assert.deepEqual((await motor(c)).llamadas, [{ nombre: 'send_product_card', argumentos: { productSlug: 't900-19' } }]);
 });
@@ -677,4 +678,17 @@ test('necesidad: la palabra no da nada en la categoría → lo que haya en la ca
   const lista = 'Para eso tengo:\n• *Batidora* — $47,00\n• *Bolso térmico* — $14,90\n• *Olla* — $30,00\n\n¿Cuál te muestro?';
   const repetida = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('algo para la cocina'), m.vendedor(lista), m.cliente('algo para licuar'), m.llamada('search_products', { category: 'Hogar y cocina' }, ID_MOTOR_2), m.resultado({ ok: true, products: productos }, ID_MOTOR_2)] });
   assert.deepEqual(await motor(repetida), { tipo: 'actual' });
+});
+
+test('«el más barato» busca por el TIPO: «reloj militar inteligente con linterna» → «reloj»; tras una ficha sin nombrar nada → el tipo del slug', async () => {
+  const c1 = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('cuál es el más barato?')], resultadoModelo: '{"buscar": true, "consulta": "reloj militar inteligente con linterna", "precio": 0, "necesidad": false}' });
+  assert.deepEqual((await motor(c1)).llamadas[0].argumentos, { query: 'reloj', precio: 0 });
+  const c2 = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('tienen audífonos?'), m.llamada('send_product_card', { productSlug: 'audifonos-a31' }), m.resultado({ ok: true, sent: true }), m.vendedor('$7. Cuántas quieres?'), m.cliente('los más baratos')], resultadoModelo: '{"buscar": true, "consulta": null, "precio": 0, "necesidad": false}' });
+  assert.deepEqual((await motor(c2)).llamadas[0].argumentos, { query: 'audifonos', precio: 0 });
+});
+
+test('«el más barato» solo entre los que SON lo pedido: el bambú de $5 no es un audífono', async () => {
+  const productos = [producto('bambu', 'Bambú chino', 5, { category: 'Otros' }), producto('a31', 'Audifonos A31', 7, { category: 'Tecnología' }), producto('clip', 'Audífonos de clip', 20, { category: 'Tecnología' })];
+  const c = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('los más baratos'), m.llamada('search_products', { query: 'audifonos', precio: 0 }, ID_MOTOR), m.resultado({ ok: true, products: productos }, ID_MOTOR)] });
+  assert.deepEqual((await motor(c)).llamadas, [{ nombre: 'send_product_card', argumentos: { productSlug: 'a31' } }]);
 });
