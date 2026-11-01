@@ -74,6 +74,28 @@ export function ultimoDelVendedor(mensajes) {
   return textoDe(lista[lista.length - 1]);
 }
 
+/**
+ * Los productos que el vendedor enseñó (send_product_card) en su último turno,
+ * el que va entre los dos últimos mensajes del cliente. Sirve para saber si la
+ * conversación se movió a un producto que no está en el carrito.
+ */
+export function fichasDelUltimoTurno(mensajes) {
+  const lista = mensajes || [];
+  let i = lista.length - 1;
+  while (i >= 0 && lista[i]?.role !== 'user') i--;
+  const slugs = [];
+  for (let j = i - 1; j >= 0 && lista[j]?.role !== 'user'; j--) {
+    for (const tc of lista[j]?.role === 'assistant' ? lista[j].tool_calls || [] : []) {
+      if (tc?.function?.name !== 'send_product_card') continue;
+      try {
+        const slug = JSON.parse(tc.function.arguments || '{}').productSlug;
+        if (slug) slugs.push(String(slug));
+      } catch {}
+    }
+  }
+  return slugs;
+}
+
 /** Lo último que escribió el cliente. */
 export function ultimoDelCliente(mensajes) {
   const lista = (mensajes || []).filter((m) => m?.role === 'user');

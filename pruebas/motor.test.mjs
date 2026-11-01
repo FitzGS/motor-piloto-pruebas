@@ -285,6 +285,36 @@ test('los seguimientos no se repiten: el 2.º y el 3.º cambian, el 4.º cede', 
   assert.deepEqual(cuarto, { tipo: 'actual' });
 });
 
+// Simulación del 31-oct-2026: el cliente pidió cambiar de producto, el agente
+// enseñó el nuevo y el motor resumió el carrito viejo con los datos.
+test('el vendedor acaba de enseñar otro producto → actual, aunque lleguen datos', async () => {
+  const c = contextoFalso({
+    borrador: { stage: 'awaiting_info' },
+    historial: [
+      m.cliente('mejor cámbialo por el micrófono'),
+      m.llamada('send_product_card', { productSlug: 'microfono' }),
+      m.resultado({ ok: true, sent: true }),
+      m.vendedor('El micrófono cuesta $35. ¿Quieres 1?'),
+      m.cliente('Nombre: Jose Prueba\nTeléfono: 0991234567\nDirección: Av. Principal 22\nCiudad: Quito'),
+    ],
+  });
+  assert.deepEqual(await motor(c), { tipo: 'actual' });
+});
+
+test('la ficha enseñada es la del carrito → el motor sigue con los datos', async () => {
+  const c = contextoFalso({
+    borrador: { stage: 'awaiting_info' },
+    historial: [
+      m.cliente('quiero el combo'),
+      m.llamada('send_product_card', { productSlug: 'combo-ligas' }),
+      m.resultado({ ok: true, sent: true }),
+      m.vendedor('Para despacharlo necesito:\n📍 Nombre y apellido\n📍 Ciudad'),
+      m.cliente('Nombre: Jose Prueba\nCiudad: Quito'),
+    ],
+  });
+  assert.equal((await motor(c)).tipo, 'herramientas');
+});
+
 // ── El intérprete, suelto ─────────────────────────────────────────────────
 test('intérprete: sí/no solo cuentan con una pregunta pendiente', () => {
   assert.equal(interpretar({ texto: 'sí', pendiente: 'confirmar', pais: ec }).intencion, 'si');

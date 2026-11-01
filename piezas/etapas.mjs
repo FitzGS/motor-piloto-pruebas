@@ -14,7 +14,7 @@
 //   3. Lo que no es inequívoco → { tipo: 'actual' }: responde el agente de hoy.
 //   4. Misma respuesta 3 veces → actual.
 
-import { camposDelPrompt, cobraAlRecibir, paisDelPrompt, resultadosRecientes, systemDe, tieneHerramienta, ultimoDe, ultimoDelCliente, ultimoDelVendedor, vecesDicho, textoDe } from './contexto.mjs';
+import { camposDelPrompt, cobraAlRecibir, fichasDelUltimoTurno, paisDelPrompt, resultadosRecientes, systemDe, tieneHerramienta, ultimoDe, ultimoDelCliente, ultimoDelVendedor, vecesDicho, textoDe } from './contexto.mjs';
 import { interpretar } from './interprete.mjs';
 import { revisar } from './guardias.mjs';
 import { PREGUNTA_CONFIRMAR, cambioTrasNo, cierreContraentrega, pedirDatos, preciosPermitidos, preview } from './redactor.mjs';
@@ -201,6 +201,14 @@ export function turnoDeVenta(contexto) {
   // ── Vuelta con mensaje del cliente ────────────────────────────────────
   const textoCliente = ultimoDelCliente(mensajes);
   if (!textoCliente.trim()) return actual(['mensaje sin texto (imagen, audio sin transcribir)']);
+  // Si el vendedor acaba de enseñar un producto que NO está en el carrito, el
+  // carrito puede estar a punto de cambiar: no se resume ni se cierra lo de
+  // antes. Simulación del 31-oct-2026: «cámbialo por el micrófono», el agente
+  // enseñó el micrófono y preguntó «¿Quieres 1?», el cliente mandó sus datos y
+  // el motor resumió y confirmó los audífonos de antes.
+  const enCarrito = new Set((borrador.items || []).map((it) => it.productSlug));
+  const otras = fichasDelUltimoTurno(mensajes).filter((s) => !enCarrito.has(s));
+  if (otras.length) return actual([`el vendedor acaba de enseñar ${otras.join(', ')}, que no está en el carrito`]);
   const ultimoVendedor = ultimoDelVendedor(mensajes);
   const f = faltantes({ borrador, campos, yaPedidos });
   const pendiente = pendienteDe({ ultimoVendedor, borrador, faltan: f.todos });
