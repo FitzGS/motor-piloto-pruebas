@@ -57,7 +57,7 @@ Responde SOLO este JSON, sin nada más: {"buscar": true|false, "consulta": "..."
  */
 export const PROMPT_CATEGORIA = `Un cliente de una tienda describió lo que necesita, sin nombrar un producto. Elige de la lista la categoría de la tienda donde buscarlo. Si ninguna encaja, null.
 
-palabra: si la necesidad apunta a UN tipo de producto concreto ("algo para licuar" → "licuadora", "para grabar videos" → "micrófono"), ese nombre en singular, para buscarlo dentro de la categoría. Si es amplia ("algo para la cocina", "un regalo"), null.
+palabra: si la necesidad apunta a UN tipo de producto concreto ("algo para licuar" → "licuadora", "para grabar videos" → "micrófono"), ese nombre en singular, para buscarlo dentro de la categoría. Si dice la EDAD o para quién ("niño de 5 años" → "juguete", "bebé" → "tetero"), el tipo de producto típico para esa persona. Si es amplia ("algo para la cocina", "un regalo"), null.
 
 Responde SOLO este JSON: {"categoria": "<nombre exacto de la lista>"|null, "palabra": "..."|null}`;
 

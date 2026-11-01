@@ -710,3 +710,8 @@ test('otro nombre: si lo que trae el otro nombre tampoco ES lo pedido, se ofrece
   assert.match(r.plan.texto, /Bandeja Molde/);
   assert.doesNotMatch(r.plan.texto, /Airpods|Afeitadora/);
 });
+
+test('necesidad con edad: el prompt pide el tipo de producto típico (niño de 5 años → juguete)', async () => {
+  const { PROMPT_CATEGORIA } = await import('../piezas/busqueda.mjs');
+  assert.match(PROMPT_CATEGORIA, /"niño de 5 años" → "juguete"/);
+});
