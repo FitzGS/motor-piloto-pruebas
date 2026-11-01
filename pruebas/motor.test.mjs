@@ -7,13 +7,14 @@ import motor, { motorConTraza } from '../index.mjs';
 import { contextoFalso, m, HERRAMIENTAS } from './contexto-falso.mjs';
 import { extraerDatos, interpretar } from '../piezas/interprete.mjs';
 import { paisDe } from '../paises/index.mjs';
+import { PROMPT_DECIDIR } from '../piezas/busqueda.mjs';
 
 const ec = paisDe('ec');
 const ve = paisDe('ve');
 
 // ── Lo que NO es del motor cede al actual ─────────────────────────────────
-test('explorando (sin carrito) → actual', async () => {
-  const c = contextoFalso({ borrador: { stage: 'browsing', items: [] }, historial: [m.cliente('hola, tienen ligas?')] });
+test('explorando (sin carrito) y solo saluda → actual, sin preguntar nada', async () => {
+  const c = contextoFalso({ borrador: { stage: 'browsing', items: [] }, historial: [m.cliente('hola, buenas tardes')] });
   assert.deepEqual(await motor(c), { tipo: 'actual' });
 });
 
@@ -325,4 +326,128 @@ test('intérprete: sí/no solo cuentan con una pregunta pendiente', () => {
 
 test('intérprete: "no tengo correo" cuando se pidió el correo → sin_dato', () => {
   assert.deepEqual(interpretar({ texto: 'no tengo correo', pendiente: 'email', pais: ec }).datos, { clave: 'email' });
+});
+
+// ── v2: la búsqueda y la ficha las decide el código ───────────────────────
+// Un id como los que arma la plataforma para un plan del motor (piloto/cliente.ts).
+const ID_MOTOR = `call_${'a1'.repeat(16)}`;
+const ID_MODELO = 'call_Xk29fPqLmN03aBcDeFgHiJk1';
+const sinCarrito = { stage: 'browsing', items: [] };
+const producto = (slug, name, price, extra = {}) => ({ slug, name, available: true, lowestPrice: price, variants: [{ slug: 'unico', label: 'Único', price, available: true }], ...extra });
+
+test('búsqueda A: pregunta por un producto sin carrito → redactar con el prompt corto de decidir', async () => {
+  const c = contextoFalso({ borrador: sinCarrito, historial: [m.vendedor('Qué producto estás buscando?'), m.cliente('tienes audífonos inalámbricos?')] });
+  const r = motorConTraza(c);
+  assert.equal(r.plan.tipo, 'redactar', r.porque.join(' | '));
+  assert.equal(r.plan.mensajes.length, 2);
+  assert.match(r.plan.mensajes[0].content, /buscar en el catálogo/);
+  assert.match(r.plan.mensajes[1].content, /tienes audífonos inalámbricos\?/);
+  assert.match(r.plan.mensajes[1].content, /Qué producto estás buscando/);
+  // Corto de verdad: es lo que hace barato el turno.
+  assert.ok(JSON.stringify(r.plan.mensajes).length < 2000);
+});
+
+test('búsqueda B: la decisión dice que sí → search_products con la consulta', async () => {
+  const c = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('tienes audífonos inalámbricos?')], resultadoModelo: '{"buscar": true, "consulta": "audífono inalámbrico", "precio": null}' });
+  assert.deepEqual(await motor(c), { tipo: 'herramientas', llamadas: [{ nombre: 'search_products', argumentos: { query: 'audífono inalámbrico' } }] });
+});
+
+test('búsqueda B: por precio → manda también el precio', async () => {
+  const c = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('cual es el reloj mas barato')], resultadoModelo: 'claro: {"buscar":true,"consulta":"reloj","precio":0}' });
+  assert.deepEqual((await motor(c)).llamadas[0].argumentos, { query: 'reloj', precio: 0 });
+});
+
+test('búsqueda B: «qué venden» sin consulta útil → search_products sin query (categorías)', async () => {
+  const c = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('que venden?')], resultadoModelo: '{"buscar":true,"consulta":"productos","precio":null}' });
+  assert.deepEqual((await motor(c)).llamadas[0].argumentos, {});
+});
+
+test('búsqueda B: la decisión dice que no, o no se entiende → actual', async () => {
+  for (const crudo of ['{"buscar": false, "consulta": null, "precio": null}', 'no sé', '{"buscar":"si"}']) {
+    const c = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('y eso cómo es?')], resultadoModelo: crudo });
+    assert.deepEqual(await motor(c), { tipo: 'actual' }, crudo);
+  }
+});
+
+test('búsqueda A: envío, pago, pedido, asesor o datos → actual sin pagar la pregunta', async () => {
+  for (const t of ['cuánto tarda el envío a Maracay?', 'aceptan pago móvil?', 'dónde va mi pedido', 'quiero hablar con un asesor', 'mi correo es ana@x.com']) {
+    const c = contextoFalso({ borrador: sinCarrito, historial: [m.cliente(t)] });
+    assert.deepEqual(await motor(c), { tipo: 'actual' }, t);
+  }
+});
+
+test('búsqueda A: acaba de ver una ficha y contesta («2», «en negro») → actual, no se vuelve a buscar', async () => {
+  const c = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('el micrófono'), m.llamada('send_product_card', { productSlug: 'microfono' }), m.resultado({ ok: true, sent: true }), m.vendedor('$35. Cuántas quieres?'), m.cliente('2')] });
+  assert.deepEqual(await motor(c), { tipo: 'actual' });
+});
+
+test('búsqueda A: con carrito no es de este tramo (lo de siempre)', async () => {
+  const c = contextoFalso({ historial: [m.vendedor('Quedan 2 combos.'), m.cliente('tienes audífonos?')] });
+  assert.equal(motorConTraza(c).plan.tipo, 'actual');
+});
+
+test('búsqueda C: un solo disponible → send_product_card de ese', async () => {
+  const c = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('quiero el micrófono'), m.llamada('search_products', { query: 'micrófono' }, ID_MOTOR), m.resultado({ ok: true, products: [producto('microfono', 'Micrófono Solapa', 35)] }, ID_MOTOR)] });
+  assert.deepEqual(await motor(c), { tipo: 'herramientas', llamadas: [{ nombre: 'send_product_card', argumentos: { productSlug: 'microfono' } }] });
+});
+
+test('búsqueda C: varios → lista corta por código con nombre y precio, y una pregunta', async () => {
+  const productos = [producto('a1', 'Audífono A', 12), producto('a2', 'Audífono B', 18.5), producto('a3', 'Audífono C', 25, { variants: [{ price: 25 }, { price: 30 }] }), producto('a4', 'Audífono D', 40)];
+  const c = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('tienes audífonos?'), m.llamada('search_products', { query: 'audífono' }, ID_MOTOR), m.resultado({ ok: true, products: productos, variasOpciones: '...' }, ID_MOTOR)] });
+  const r = motorConTraza(c);
+  assert.equal(r.plan.tipo, 'texto', r.porque.join(' | '));
+  assert.match(r.plan.texto, /Audífono A\* — \$12,00/);
+  assert.match(r.plan.texto, /Audífono B\* — \$18,50/);
+  assert.match(r.plan.texto, /Audífono C\* — desde \$25,00/);
+  assert.doesNotMatch(r.plan.texto, /Audífono D/);
+  assert.equal((r.plan.texto.match(/\?/g) || []).length, 1);
+});
+
+test('búsqueda C: los agotados no entran en la lista ni en la ficha', async () => {
+  const c = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('tienes relojes?'), m.llamada('search_products', { query: 'reloj' }, ID_MOTOR), m.resultado({ ok: true, products: [producto('r1', 'Reloj 1', 10, { available: false }), producto('r2', 'Reloj 2', 20)] }, ID_MOTOR)] });
+  assert.deepEqual((await motor(c)).llamadas, [{ nombre: 'send_product_card', argumentos: { productSlug: 'r2' } }]);
+});
+
+test('búsqueda C: agotado, nada, o categorías → actual (escribe con la alternativa que trae el resultado)', async () => {
+  for (const res of [{ ok: true, products: [], agotados: [{ slug: 'x', name: 'X' }] }, { ok: true, products: [], noEstaComoDecirlo: '...' }, { ok: true, products: [producto('a', 'A', 1)], categorias: ['Hogar', 'Audio', 'Belleza'] }, { ok: false }]) {
+    const c = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('tienes cámaras?'), m.llamada('search_products', { query: 'cámara' }, ID_MOTOR), m.resultado(res, ID_MOTOR)] });
+    assert.deepEqual(await motor(c), { tipo: 'actual' }, JSON.stringify(res));
+  }
+});
+
+test('búsqueda C: si la búsqueda la pidió el agente actual, no se toca → actual', async () => {
+  const c = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('quiero el micrófono'), m.llamada('search_products', { query: 'micrófono' }, ID_MODELO), m.resultado({ ok: true, products: [producto('microfono', 'Micrófono', 35)] }, ID_MODELO)] });
+  assert.deepEqual(await motor(c), { tipo: 'actual' });
+});
+
+test('búsqueda C: el producto ya se enseñó en el chat → actual, sin repetir la ficha', async () => {
+  const c = contextoFalso({ borrador: sinCarrito, historial: [m.llamada('send_product_card', { productSlug: 'microfono' }, 'call_viejo'), m.resultado({ ok: true }, 'call_viejo'), m.vendedor('Cuántas quieres?'), m.cliente('mmm y el micrófono cuánto era'), m.llamada('search_products', { query: 'micrófono' }, ID_MOTOR), m.resultado({ ok: true, products: [producto('microfono', 'Micrófono', 35)] }, ID_MOTOR)] });
+  assert.deepEqual(await motor(c), { tipo: 'actual' });
+});
+
+test('búsqueda D: tras la ficha que mandó el motor → escribe el actual', async () => {
+  const id2 = `call_${'b2'.repeat(16)}`;
+  const c = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('quiero el micrófono'), m.llamada('search_products', { query: 'micrófono' }, ID_MOTOR), m.resultado({ ok: true, products: [producto('microfono', 'Micrófono', 35)] }, ID_MOTOR), m.llamada('send_product_card', { productSlug: 'microfono' }, id2), m.resultado({ ok: true, sent: true }, id2)] });
+  assert.deepEqual(await motor(c), { tipo: 'actual' });
+});
+
+test('búsqueda: sin search_products o send_product_card activas → no es del motor', async () => {
+  const sin = HERRAMIENTAS.filter((t) => t.function.name !== 'send_product_card');
+  const c = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('tienes audífonos?')], herramientas: sin });
+  assert.deepEqual(await motor(c), { tipo: 'actual' });
+});
+
+test('búsqueda C: el encabezado dice de dónde sale la lista (general, por precio)', async () => {
+  const productos = [producto('a1', 'Uno', 7), producto('a2', 'Dos', 15), producto('a3', 'Tres', 29)];
+  const lista = async (argumentos) => (await motor(contextoFalso({ borrador: sinCarrito, historial: [m.cliente('x'), m.llamada('search_products', argumentos, ID_MOTOR), m.resultado({ ok: true, products: productos }, ID_MOTOR)] }))).texto;
+  assert.match(await lista({}), /^Algunos de nuestros productos:/);
+  assert.match(await lista({ precio: 0 }), /^Lo más económico que tengo:/);
+  assert.match(await lista({ precio: 20 }), /^Cerca de ese precio tengo:/);
+  assert.match(await lista({ query: 'x' }), /^Tengo estas opciones:/);
+});
+
+test('búsqueda A: el prompt de decidir no deja inventar productos ni buscar necesidades', () => {
+  assert.match(PROMPT_DECIDIR, /Nunca pongas un producto que el cliente no nombró/);
+  assert.match(PROMPT_DECIDIR, /NECESIDAD sin nombrar el producto/);
+  assert.match(PROMPT_DECIDIR, /EN GENERAL qué venden/);
 });
