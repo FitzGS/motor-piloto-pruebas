@@ -255,7 +255,9 @@ export function esDeEseTipo(nombre, consulta) {
   const [cabeza, ...resto] = palabras;
   const todas = normalizar(nombre).split(' ').filter((p) => p.length >= 2 && !VACIAS.has(p));
   const primeras = todas.slice(0, 3);
-  const lleva = (lista, w) => lista.some((p) => p.startsWith(raiz(w)));
+  // Una palabra corta se compara entera: «air» (de «air fryer») no es «airpods»
+  // (pasada 15: por eso la bandeja acabó vendida como freidora).
+  const lleva = (lista, w) => lista.some((p) => (w.length <= 4 ? p === w : p.startsWith(raiz(w))));
   // La palabra principal («parlante» en «parlante bluetooth») va al frente del
   // nombre; o, si va al final («Bomba Carolina Herrera PERFUME»), otra de las
   // pedidas va al frente («Bomba»). Un adjetivo suelto («bluetooth») no basta.

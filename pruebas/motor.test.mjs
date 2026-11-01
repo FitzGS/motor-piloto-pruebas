@@ -692,3 +692,21 @@ test('«el más barato» solo entre los que SON lo pedido: el bambú de $5 no es
   const c = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('los más baratos'), m.llamada('search_products', { query: 'audifonos', precio: 0 }, ID_MOTOR), m.resultado({ ok: true, products: productos }, ID_MOTOR)] });
   assert.deepEqual((await motor(c)).llamadas, [{ nombre: 'send_product_card', argumentos: { productSlug: 'a31' } }]);
 });
+
+test('es de ese tipo: una palabra corta se compara entera («air» no es «airpods»)', async () => {
+  const { esDeEseTipo } = await import('../piezas/busqueda.mjs');
+  assert.equal(esDeEseTipo('Airpods pro 2', 'air fryer'), false);
+  assert.equal(esDeEseTipo('Aro de luz LED', 'aro de luz'), true);
+  assert.equal(esDeEseTipo('Cargador 3 en 1', 'aro'), false);
+});
+
+test('otro nombre: si lo que trae el otro nombre tampoco ES lo pedido, se ofrece lo relacionado (no cede al actual)', async () => {
+  const bandeja = producto('bandeja', 'Bandeja Molde De Silicon Protector Freidora Anti-adherente', 11);
+  const airpods = producto('airpods', 'Airpods pro 2', 20);
+  const c = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('quiero la freidora de aire'), m.llamada('search_products', { query: 'freidora de aire' }, ID_MOTOR), m.resultado({ ok: true, products: [bandeja] }, ID_MOTOR), m.llamada('search_products', { query: 'freidora eléctrica' }, ID_MOTOR_2), m.resultado({ ok: true, products: [producto('afeitadora', 'Afeitadora Electrica Facial', 15)] }, ID_MOTOR_2), m.llamada('search_products', { query: 'air fryer' }, ID_MOTOR_3), m.resultado({ ok: true, products: [airpods, producto('a31', 'Audifonos A31', 7)] }, ID_MOTOR_3)] });
+  const r = motorConTraza(c);
+  assert.equal(r.plan.tipo, 'texto', r.porque.join(' | '));
+  assert.match(r.plan.texto, /Freidora de aire como tal no tengo/);
+  assert.match(r.plan.texto, /Bandeja Molde/);
+  assert.doesNotMatch(r.plan.texto, /Airpods|Afeitadora/);
+});
