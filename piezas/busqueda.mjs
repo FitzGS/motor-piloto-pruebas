@@ -542,7 +542,8 @@ export function turnoDeBusqueda(contexto) {
         return ws.length === 2 ? ws.join(' ') : ws[0] || null;
       };
       const deLaFicha = fichasDelUltimoTurno(mensajes)[0];
-      const tipo = d.consulta ? tipoDe(d.consulta) : deLaFicha ? tipoDe(String(deLaFicha).replace(/-/g, ' ').split(' ').slice(0, 2).join(' ')) : null;
+      // Del slug de la ficha solo la primera palabra: «audifonos-a31» → audifonos.
+      const tipo = d.consulta ? tipoDe(d.consulta) : deLaFicha ? tipoDe(String(deLaFicha).split('-')[0] || '') : null;
       if (tipo) argumentos.query = tipo; else delete argumentos.query;
     }
     return { plan: { tipo: 'herramientas', llamadas: [{ nombre: 'search_products', argumentos }] }, porque: [`buscar ${JSON.stringify(argumentos)}`] };
