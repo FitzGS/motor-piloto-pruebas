@@ -658,3 +658,23 @@ test('necesidad en catálogo chico (sin categorías) → actual; «qué venden»
   const general = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('hola, qué venden?'), m.llamada('search_products', {}, ID_MOTOR), m.resultado({ ok: true, products: [producto('a', 'A', 1)], categorias: ['X', 'Y', 'Z'] }, ID_MOTOR)] });
   assert.deepEqual(await motor(general), { tipo: 'actual' });
 });
+
+test('necesidad concreta → categoría + palabra («algo para licuar» → licuadora dentro de Hogar y cocina)', async () => {
+  const conCategorias = { ok: true, products: [producto('p', 'Pijama', 30)], categorias: ['Tecnología y gadgets', 'Hogar y cocina', 'Ropa'] };
+  const c = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('algo para licuar'), m.llamada('search_products', {}, ID_MOTOR), m.resultado(conCategorias, ID_MOTOR)], resultadoModelo: '{"categoria": "Hogar y cocina", "palabra": "licuadora"}' });
+  assert.deepEqual(await motor(c), { tipo: 'herramientas', llamadas: [{ nombre: 'search_products', argumentos: { category: 'Hogar y cocina', query: 'licuadora' } }] });
+  // Dentro de la categoría, con la palabra: primero lo que se llama así.
+  const r = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('algo para licuar'), m.llamada('search_products', { category: 'Hogar y cocina', query: 'licuadora' }, ID_MOTOR_2), m.resultado({ ok: true, products: [producto('bat', 'Batidora licuadora de mano', 47), producto('lic', 'Licuadora de vaso', 25)] }, ID_MOTOR_2)] });
+  const plan = await motor(r);
+  assert.equal(plan.tipo, 'texto');
+  assert.match(plan.texto, /Licuadora de vaso/);
+});
+
+test('necesidad: la palabra no da nada en la categoría → lo que haya en la categoría; la misma lista no se repite', async () => {
+  const vacio2 = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('algo para licuar'), m.llamada('search_products', { category: 'Hogar y cocina', query: 'licuadora' }, ID_MOTOR), m.resultado({ ok: true, products: [] }, ID_MOTOR)] });
+  assert.deepEqual(await motor(vacio2), { tipo: 'herramientas', llamadas: [{ nombre: 'search_products', argumentos: { category: 'Hogar y cocina' } }] });
+  const productos = [producto('bat', 'Batidora', 47), producto('bolso', 'Bolso térmico', 14.9), producto('olla', 'Olla', 30)];
+  const lista = 'Para eso tengo:\n• *Batidora* — $47,00\n• *Bolso térmico* — $14,90\n• *Olla* — $30,00\n\n¿Cuál te muestro?';
+  const repetida = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('algo para la cocina'), m.vendedor(lista), m.cliente('algo para licuar'), m.llamada('search_products', { category: 'Hogar y cocina' }, ID_MOTOR_2), m.resultado({ ok: true, products: productos }, ID_MOTOR_2)] });
+  assert.deepEqual(await motor(repetida), { tipo: 'actual' });
+});

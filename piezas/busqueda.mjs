@@ -57,7 +57,9 @@ Responde SOLO este JSON, sin nada más: {"buscar": true|false, "consulta": "..."
  */
 export const PROMPT_CATEGORIA = `Un cliente de una tienda describió lo que necesita, sin nombrar un producto. Elige de la lista la categoría de la tienda donde buscarlo. Si ninguna encaja, null.
 
-Responde SOLO este JSON: {"categoria": "<nombre exacto de la lista>"|null}`;
+palabra: si la necesidad apunta a UN tipo de producto concreto ("algo para licuar" → "licuadora", "para grabar videos" → "micrófono"), ese nombre en singular, para buscarlo dentro de la categoría. Si es amplia ("algo para la cocina", "un regalo"), null.
+
+Responde SOLO este JSON: {"categoria": "<nombre exacto de la lista>"|null, "palabra": "..."|null}`;
 
 export function mensajesParaCategoria({ cliente, categorias }) {
   return [
@@ -66,14 +68,18 @@ export function mensajesParaCategoria({ cliente, categorias }) {
   ];
 }
 
-/** La categoría elegida, solo si es una de la lista (tal cual). */
+/** La categoría elegida (solo si es una de la lista, tal cual) y la palabra para buscar dentro. */
 export function leerCategoria(crudo, categorias = []) {
   const m = /\{[\s\S]*\}/.exec(String(crudo || ''));
   if (!m) return null;
   let o;
   try { o = JSON.parse(m[0]); } catch { return null; }
   const t = typeof o?.categoria === 'string' ? o.categoria.trim() : '';
-  return categorias.find((c) => normalizar(c) === normalizar(t)) || null;
+  const categoria = categorias.find((c) => normalizar(c) === normalizar(t)) || null;
+  if (!categoria) return null;
+  const p = typeof o?.palabra === 'string' ? o.palabra.trim().slice(0, 40) : '';
+  const palabra = p && !/[,;+]/.test(p) && p.split(/\s+/).length <= 2 ? p : null;
+  return { categoria, palabra };
 }
 
 // «¿Qué venden?» a secas: se contesta con categorías o con lo destacado. Una
@@ -345,9 +351,14 @@ export function turnoDeBusqueda(contexto) {
       if (!esNecesidad) return actual(['catálogo grande: las categorías las nombra el actual']);
       const categorias = r.categorias.filter((c) => typeof c === 'string' && c.trim());
       if (contexto.resultadoModelo) {
-        const categoria = leerCategoria(contexto.resultadoModelo, categorias);
-        if (!categoria) return actual(['ninguna categoría encaja: lo lleva el actual']);
-        return { plan: { tipo: 'herramientas', llamadas: [{ nombre: 'search_products', argumentos: { category: categoria } }] }, porque: [`necesidad → categoría ${categoria}`] };
+        const elegida = leerCategoria(contexto.resultadoModelo, categorias);
+        if (!elegida) return actual(['ninguna categoría encaja: lo lleva el actual']);
+        // Con palabra («algo para licuar» → licuadora) se busca ESO dentro de
+        // la categoría; sin ella, lo que haya. Sin la palabra, «algo para
+        // licuar» tras «algo para la cocina» repetía la misma lista y la
+        // plataforma, que no repite lo que acaba de decir, se callaba (g14).
+        const argumentos = elegida.palabra ? { category: elegida.categoria, query: elegida.palabra } : { category: elegida.categoria };
+        return { plan: { tipo: 'herramientas', llamadas: [{ nombre: 'search_products', argumentos }] }, porque: [`necesidad → categoría ${elegida.categoria}${elegida.palabra ? ` · ${elegida.palabra}` : ''}`] };
       }
       return { plan: { tipo: 'redactar', mensajes: mensajesParaCategoria({ cliente: textoCliente, categorias }) }, porque: ['necesidad: ¿qué categoría?'] };
     }
@@ -359,7 +370,13 @@ export function turnoDeBusqueda(contexto) {
     const consultaActual = pedido.query || null;
     const vendibles = (r.products || []).filter((p) => p && p.slug && p.available !== false);
     const nadaConEseNombre = consultaActual ? !vendibles.some((p) => esDeEseTipo(p.name, consultaActual)) : !vendibles.length;
-    if (nadaConEseNombre && typeof pedido.precio !== 'number') {
+    // Dentro de una categoría no se prueban otros nombres: si la palabra no
+    // dio nada, se enseña lo que hay en la categoría.
+    if (pedido.category && pedido.query && !vendibles.length) {
+      if (busquedas.some((b) => b.resultado && !b.query && b.resultado.products && !b.resultado.categorias)) return actual(['la categoría tampoco tiene: lo lleva el actual']);
+      return { plan: { tipo: 'herramientas', llamadas: [{ nombre: 'search_products', argumentos: { category: pedido.category } }] }, porque: [`sin «${pedido.query}» en ${pedido.category}: lo que haya`] };
+    }
+    if (nadaConEseNombre && typeof pedido.precio !== 'number' && !pedido.category) {
       const probadas = busquedas.map((b) => b.query).filter(Boolean);
       if (!busquedas[0]?.query) return actual(['búsqueda general sin nada: lo dice el actual']);
       // Lo relacionado que apareció en el turno (contiene la palabra pero no es
@@ -409,11 +426,16 @@ export function turnoDeBusqueda(contexto) {
       if (fichasEnviadas(mensajes).has(String(barato.slug))) return actual([`el más barato (${barato.slug}) ya se enseñó: contesta el actual`]);
       return { plan: { tipo: 'herramientas', llamadas: [{ nombre: 'send_product_card', argumentos: { productSlug: String(barato.slug) } }] }, porque: [`el más barato: ficha de ${barato.slug}`] };
     }
-    // Por categoría (necesidad): lo que hay en ella, en lista.
-    if (pedido.category && !pedido.query) {
-      const elegidos = disponibles.slice(0, 3);
+    // Por categoría (necesidad): lo que hay en ella, en lista; con palabra,
+    // primero lo que se llama así.
+    if (pedido.category) {
+      const deEseTipo = pedido.query ? disponibles.filter((p) => esDeEseTipo(p.name, pedido.query)) : [];
+      const elegidos = (deEseTipo.length ? deEseTipo : disponibles).slice(0, 3);
       if (elegidos.length === 1) return { plan: { tipo: 'herramientas', llamadas: [{ nombre: 'send_product_card', argumentos: { productSlug: String(elegidos[0].slug) } }] }, porque: [`categoría ${pedido.category}: uno, ficha`] };
       const t = listaDeOpciones(elegidos, { categoria: pedido.category });
+      // La misma lista que acaba de decir no se repite: la plataforma la
+      // callaría. Que conteste el actual con lo que ya tiene delante.
+      if (vecesDicho(mensajes, t) >= 1) return actual(['la lista por categoría ya se dijo: contesta el actual']);
       const rev = revisar({ texto: t, contexto: { preciosPermitidos: elegidos.map((p) => precioDe(p)?.valor).filter((n) => n !== undefined && n !== null).map((n) => Number(n.toFixed(2))), numerosPermitidos: [], correosPermitidos: [], vecesDicho: (x) => vecesDicho(mensajes, x) } });
       if (!rev.texto) return actual(['la lista por categoría no pasó las guardias']);
       return { plan: { tipo: 'texto', texto: rev.texto }, porque: [`categoría ${pedido.category}: lista de ${elegidos.length}`] };
