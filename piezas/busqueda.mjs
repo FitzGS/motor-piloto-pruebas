@@ -425,14 +425,18 @@ export function turnoDeBusqueda(contexto) {
     // El mismo nombre dos veces es el mismo producto para el cliente (catálogos
     // importados con duplicados): una lista con tres «Bomba Carolina Herrera»
     // no deja elegir nada (tienda grande, pasada 8). Se queda el primero.
-    const nombres = new Set();
-    const disponibles = r.products.filter((p) => {
-      if (!p || !p.slug || p.available === false) return false;
+    // De los repetidos se queda el MÁS BARATO (tres «T900» a $30, $25 y $19:
+    // quedarse con el primero decía que el más barato era el de $25, g17).
+    const porNombreUnico = new Map();
+    for (const p of r.products) {
+      if (!p || !p.slug || p.available === false) continue;
       const clave = normalizar(p.name);
-      if (nombres.has(clave)) return false;
-      nombres.add(clave);
-      return true;
-    });
+      const previo = porNombreUnico.get(clave);
+      const precio = precioDe(p)?.valor ?? Infinity;
+      const precioPrevio = previo ? (precioDe(previo)?.valor ?? Infinity) : Infinity;
+      if (!previo || precio < precioPrevio) porNombreUnico.set(clave, p);
+    }
+    const disponibles = r.products.filter((p) => p && porNombreUnico.get(normalizar(p.name)) === p);
     if (!disponibles.length) return actual(['nada disponible: lo dice el actual con su alternativa']);
     // «El más barato»: lo decide el código. La plataforma ya los manda del más
     // barato al más caro; se toma el de menor precio y va su ficha.

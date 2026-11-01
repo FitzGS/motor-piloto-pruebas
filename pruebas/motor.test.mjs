@@ -727,3 +727,9 @@ test('tras la ficha del más barato, el texto va por código con ese nombre y pr
   assert.equal(r.plan.texto, 'Lo más económico que tengo es *Reloj Niños 3 en 1* a $11,00. ¿Cuántas quieres?');
 });
 
+
+test('nombres repetidos: se queda el más barato, no el primero', async () => {
+  const productos = [producto('t900-30', 'T900 Ultra 2 Smart Watch', 30, { category: 'Tecnología' }), producto('t900-25', 'T900 Ultra 2 Smart Watch', 25, { category: 'Tecnología' }), producto('t900-19', 'T900 Ultra 2 Smart Watch', 19, { category: 'Tecnología' }), producto('militar', 'Reloj militar', 65, { category: 'Tecnología' })];
+  const c = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('cuál es el más barato?'), m.llamada('search_products', { query: 'reloj inteligente', precio: 0 }, ID_MOTOR), m.resultado({ ok: true, products: productos }, ID_MOTOR)] });
+  assert.deepEqual((await motor(c)).llamadas, [{ nombre: 'send_product_card', argumentos: { productSlug: 't900-19' } }]);
+});
