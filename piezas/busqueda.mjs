@@ -337,6 +337,21 @@ export function turnoDeBusqueda(contexto) {
     const resultados = resultadosRecientes(mensajes);
     if (resultados.length !== 1 || resultados[0].nombre !== 'search_products') {
       // D: la ficha ya salió; escribe el actual con las reglas de la tienda.
+      // Salvo tras la ficha del MÁS BARATO: el actual escribía otro precio
+      // («el más barato es el T900 de $25» con la ficha del de $11 delante,
+      // g16). Ahí el texto va por código, con el nombre y el precio de la ficha.
+      const ficha = resultados.find((x) => x.nombre === 'send_product_card');
+      const ultimaBusqueda = busquedasDelTurno(mensajes).slice(-1)[0];
+      if (ficha && ultimaBusqueda?.precio === 0 && ficha.resultado?.ok) {
+        const slug = String(ficha.argumentos?.productSlug || '');
+        const p = (ultimaBusqueda.resultado?.products || []).find((x) => x && String(x.slug) === slug);
+        const pr = p ? precioDe(p) : null;
+        if (p && pr) {
+          const t = `Lo más económico que tengo es *${p.name}* a ${pr.texto}. ¿Cuántas quieres?`;
+          const rev = revisar({ texto: t, contexto: { preciosPermitidos: [Number(pr.valor.toFixed(2))], numerosPermitidos: [], correosPermitidos: [], vecesDicho: (x) => vecesDicho(mensajes, x) } });
+          if (rev.texto) return { plan: { tipo: 'texto', texto: rev.texto }, porque: ['tras la ficha del más barato: texto por código'] };
+        }
+      }
       return actual(['tras la ficha: escribe el actual']);
     }
     const r = resultados[0].resultado || {};
@@ -519,9 +534,15 @@ export function turnoDeBusqueda(contexto) {
     // Y «los más baratos» justo después de una ficha, sin nombrar nada, son
     // los más baratos DE ESO: el tipo sale del slug de la ficha (g14).
     if (d.precio === 0) {
-      const cabeza = (q) => normalizar(q).split(' ').find((w) => w.length >= 3 && !VACIAS.has(w)) || null;
+      // El tipo: la primera palabra, o las dos si solo son dos («reloj
+      // inteligente» sigue siendo inteligente; «reloj militar inteligente con
+      // linterna» se queda en «reloj»).
+      const tipoDe = (q) => {
+        const ws = normalizar(q).split(' ').filter((w) => w.length >= 3 && !VACIAS.has(w));
+        return ws.length === 2 ? ws.join(' ') : ws[0] || null;
+      };
       const deLaFicha = fichasDelUltimoTurno(mensajes)[0];
-      const tipo = d.consulta ? cabeza(d.consulta) : deLaFicha ? cabeza(String(deLaFicha).replace(/-/g, ' ')) : null;
+      const tipo = d.consulta ? tipoDe(d.consulta) : deLaFicha ? tipoDe(String(deLaFicha).replace(/-/g, ' ').split(' ').slice(0, 2).join(' ')) : null;
       if (tipo) argumentos.query = tipo; else delete argumentos.query;
     }
     return { plan: { tipo: 'herramientas', llamadas: [{ nombre: 'search_products', argumentos }] }, porque: [`buscar ${JSON.stringify(argumentos)}`] };

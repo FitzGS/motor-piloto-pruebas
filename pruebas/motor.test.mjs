@@ -683,6 +683,8 @@ test('necesidad: la palabra no da nada en la categoría → lo que haya en la ca
 test('«el más barato» busca por el TIPO: «reloj militar inteligente con linterna» → «reloj»; tras una ficha sin nombrar nada → el tipo del slug', async () => {
   const c1 = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('cuál es el más barato?')], resultadoModelo: '{"buscar": true, "consulta": "reloj militar inteligente con linterna", "precio": 0, "necesidad": false}' });
   assert.deepEqual((await motor(c1)).llamadas[0].argumentos, { query: 'reloj', precio: 0 });
+  const c1b = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('cuál es el más barato?')], resultadoModelo: '{"buscar": true, "consulta": "reloj inteligente", "precio": 0, "necesidad": false}' });
+  assert.deepEqual((await motor(c1b)).llamadas[0].argumentos, { query: 'reloj inteligente', precio: 0 });
   const c2 = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('tienen audífonos?'), m.llamada('send_product_card', { productSlug: 'audifonos-a31' }), m.resultado({ ok: true, sent: true }), m.vendedor('$7. Cuántas quieres?'), m.cliente('los más baratos')], resultadoModelo: '{"buscar": true, "consulta": null, "precio": 0, "necesidad": false}' });
   assert.deepEqual((await motor(c2)).llamadas[0].argumentos, { query: 'audifonos', precio: 0 });
 });
@@ -715,3 +717,13 @@ test('necesidad con edad: el prompt pide el tipo de producto típico (niño de 5
   const { PROMPT_CATEGORIA } = await import('../piezas/busqueda.mjs');
   assert.match(PROMPT_CATEGORIA, /"niño de 5 años" → "juguete"/);
 });
+
+test('tras la ficha del más barato, el texto va por código con ese nombre y precio', async () => {
+  const productos = [producto('ninos', 'Reloj Niños 3 en 1', 11, { category: 'Tecnología' }), producto('t900', 'T900 Smart Watch', 25, { category: 'Tecnología' })];
+  const id2 = `call_${'e5'.repeat(16)}`;
+  const c = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('cuál es el más barato?'), m.llamada('search_products', { query: 'reloj', precio: 0 }, ID_MOTOR), m.resultado({ ok: true, products: productos }, ID_MOTOR), m.llamada('send_product_card', { productSlug: 'ninos' }, id2), m.resultado({ ok: true, sent: true, productSlug: 'ninos' }, id2)] });
+  const r = motorConTraza(c);
+  assert.equal(r.plan.tipo, 'texto', r.porque.join(' | '));
+  assert.equal(r.plan.texto, 'Lo más económico que tengo es *Reloj Niños 3 en 1* a $11,00. ¿Cuántas quieres?');
+});
+
