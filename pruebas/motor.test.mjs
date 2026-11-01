@@ -441,11 +441,11 @@ test('búsqueda: sin search_products o send_product_card activas → no es del m
 
 test('búsqueda C: el encabezado dice de dónde sale la lista (general, por precio)', async () => {
   const productos = [producto('a1', 'Reloj uno', 7), producto('a2', 'Reloj dos', 15), producto('a3', 'Reloj tres', 29)];
-  const lista = async (argumentos) => (await motor(contextoFalso({ borrador: sinCarrito, historial: [m.cliente('x'), m.llamada('search_products', argumentos, ID_MOTOR), m.resultado({ ok: true, products: productos }, ID_MOTOR)] }))).texto;
-  assert.match(await lista({}), /^Algunos de nuestros productos:/);
-  assert.match(await lista({ precio: 0 }), /^Lo más económico que tengo:/);
-  assert.match(await lista({ precio: 20 }), /^Cerca de ese precio tengo:/);
+  const lista = async (argumentos, dijo = 'tienen relojes?') => (await motor(contextoFalso({ borrador: sinCarrito, historial: [m.cliente(dijo), m.llamada('search_products', argumentos, ID_MOTOR), m.resultado({ ok: true, products: productos }, ID_MOTOR)] }))).texto;
+  assert.match(await lista({}, 'qué venden?'), /^Algunos de nuestros productos:/);
+  assert.match(await lista({ precio: 20 }, 'algo de 20'), /^Cerca de ese precio tengo:/);
   assert.match(await lista({ query: 'reloj' }), /^Tengo estas opciones:/);
+  assert.match(await lista({ category: 'Hogar' }, 'algo para la casa'), /^Para eso tengo:/);
 });
 
 test('búsqueda A: el prompt de decidir no deja inventar productos ni buscar necesidades', () => {
@@ -595,4 +595,66 @@ test('mirar opciones: frases', async () => {
   const { exploraOpciones } = await import('../piezas/busqueda.mjs');
   for (const t of ['qué audífonos tienen?', 'tienes relojes?', 'cuáles relojes hay', 'qué modelos de licuadora manejan']) assert.equal(exploraOpciones(t), true, t);
   for (const t of ['quiero los audífonos', 'tienes el micrófono?', 'me llevo la licuadora', 'tienen un parlante bluetooth?']) assert.equal(exploraOpciones(t), false, t);
+});
+
+// ── Pasadas 10 a 13 de la tienda grande: lo que fallaba al elegir ─────────
+test('«el más barato» lo decide el código: ficha del de menor precio, no lista', async () => {
+  const productos = [producto('t900-30', 'T900 Smart Watch', 30), producto('t900-19', 'T900 Smart Watch Lite', 19), producto('militar', 'Reloj militar', 65)];
+  const c = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('cuál es el más barato?'), m.llamada('search_products', { query: 'reloj', precio: 0 }, ID_MOTOR), m.resultado({ ok: true, products: productos }, ID_MOTOR)] });
+  assert.deepEqual((await motor(c)).llamadas, [{ nombre: 'send_product_card', argumentos: { productSlug: 't900-19' } }]);
+});
+
+test('«cuál es el más barato» tras ver una ficha NO cede al actual: pregunta la decisión', async () => {
+  const c = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('tienen relojes?'), m.llamada('send_product_card', { productSlug: 'militar' }), m.resultado({ ok: true, sent: true }), m.vendedor('Reloj militar $65. Cuántas quieres?'), m.cliente('cuál es el más barato?')] });
+  assert.equal(motorConTraza(c).plan.tipo, 'redactar');
+});
+
+test('accesorio ≠ producto: «freidora de aire» con solo la bandeja PARA freidora → prueba otro nombre', async () => {
+  const bandeja = producto('bandeja', 'Bandeja molde de silicón protector freidora', 11);
+  const c = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('quiero una freidora de aire'), m.llamada('search_products', { query: 'freidora de aire' }, ID_MOTOR), m.resultado({ ok: true, products: [bandeja] }, ID_MOTOR)] });
+  assert.equal(motorConTraza(c).plan.tipo, 'redactar');
+});
+
+test('accesorio ≠ producto: agotados los nombres, lo relacionado se ofrece como relacionado, por código', async () => {
+  const bandeja = producto('bandeja', 'Bandeja molde de silicón protector freidora', 11);
+  const c = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('quiero una freidora de aire'), m.llamada('search_products', { query: 'freidora de aire' }, ID_MOTOR), m.resultado({ ok: true, products: [bandeja] }, ID_MOTOR), m.llamada('search_products', { query: 'air fryer' }, ID_MOTOR_2), m.resultado({ ok: true, products: [] }, ID_MOTOR_2), m.llamada('search_products', { query: 'freidora sin aceite' }, ID_MOTOR_3), m.resultado({ ok: true, products: [bandeja] }, ID_MOTOR_3)] });
+  const r = motorConTraza(c);
+  assert.equal(r.plan.tipo, 'texto', r.porque.join(' | '));
+  assert.match(r.plan.texto, /^Freidora de aire como tal no tengo por ahora\. Relacionado con eso tengo:/);
+  assert.match(r.plan.texto, /Bandeja molde.*\$11,00/);
+  assert.doesNotMatch(r.plan.texto, /parecid|cercan/);
+});
+
+test('es de ese tipo: la palabra pedida va entre las primeras del nombre', async () => {
+  const { esDeEseTipo } = await import('../piezas/busqueda.mjs');
+  assert.equal(esDeEseTipo('Bandeja molde de silicón protector freidora', 'freidora de aire'), false);
+  assert.equal(esDeEseTipo('Lentes de sol inteligentes con bluetooth y bocinas', 'bocina'), false);
+  assert.equal(esDeEseTipo('Eigiis Reloj Militar Inteligente', 'reloj inteligente'), true);
+  assert.equal(esDeEseTipo('Bomba Carolina Herrera perfume', 'perfume bomba'), true);
+  assert.equal(esDeEseTipo('Corneta Trust GXT606B', 'corneta'), true);
+  assert.equal(esDeEseTipo('Cámara tipo domo', 'cámara de seguridad'), true);
+});
+
+test('necesidad → categoría: «algo para la cocina» busca sin texto, elige categoría y lista lo de esa categoría', async () => {
+  const c1 = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('necesito algo para la cocina')], resultadoModelo: '{"buscar": true, "consulta": null, "precio": null, "necesidad": true}' });
+  assert.deepEqual(await motor(c1), { tipo: 'herramientas', llamadas: [{ nombre: 'search_products', argumentos: {} }] });
+  const conCategorias = { ok: true, products: [producto('p', 'Pijama', 30)], categorias: ['Tecnología y gadgets', 'Hogar y cocina', 'Ropa'] };
+  const c2 = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('necesito algo para la cocina'), m.llamada('search_products', {}, ID_MOTOR), m.resultado(conCategorias, ID_MOTOR)] });
+  const r2 = motorConTraza(c2);
+  assert.equal(r2.plan.tipo, 'redactar', r2.porque.join(' | '));
+  assert.match(r2.plan.mensajes[1].content, /"Hogar y cocina"/);
+  const c3 = contextoFalso({ borrador: sinCarrito, historial: c2.mensajes.slice(1), resultadoModelo: '{"categoria": "hogar y cocina"}' });
+  assert.deepEqual(await motor(c3), { tipo: 'herramientas', llamadas: [{ nombre: 'search_products', argumentos: { category: 'Hogar y cocina' } }] });
+  const c4 = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('necesito algo para la cocina'), m.llamada('search_products', { category: 'Hogar y cocina' }, ID_MOTOR_2), m.resultado({ ok: true, products: [producto('lic', 'Licuadora', 25), producto('bat', 'Batidora', 47), producto('olla', 'Olla', 30), producto('x', 'Sartén', 12)] }, ID_MOTOR_2)] });
+  const r4 = await motor(c4);
+  assert.equal(r4.tipo, 'texto');
+  assert.match(r4.texto, /^Para eso tengo:/);
+  assert.doesNotMatch(r4.texto, /Sartén/);
+});
+
+test('necesidad en catálogo chico (sin categorías) → actual; «qué venden» con categorías → actual', async () => {
+  const chico = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('necesito algo para la cocina'), m.llamada('search_products', {}, ID_MOTOR), m.resultado({ ok: true, products: [producto('a', 'A', 1), producto('b', 'B', 2)] }, ID_MOTOR)] });
+  assert.deepEqual(await motor(chico), { tipo: 'actual' });
+  const general = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('hola, qué venden?'), m.llamada('search_products', {}, ID_MOTOR), m.resultado({ ok: true, products: [producto('a', 'A', 1)], categorias: ['X', 'Y', 'Z'] }, ID_MOTOR)] });
+  assert.deepEqual(await motor(general), { tipo: 'actual' });
 });

@@ -41,14 +41,48 @@ export const PROMPT_DECIDIR = `Decides UNA cosa: si para contestarle a este clie
 buscar=true si NOMBRA un producto (audífonos, reloj, faja…) y pregunta si lo hay, su precio, colores, tallas o fotos, o dice que lo quiere.
 buscar=true y consulta=null si pregunta EN GENERAL qué venden o qué tienen, sin más, o pide ver el catálogo.
 buscar=false si saluda, agradece, dicta sus datos, confirma o rechaza algo, contesta una cantidad, reclama, o pregunta por el envío, el pago o un pedido.
-buscar=false si NO nombra un producto concreto y en cambio describe una NECESIDAD, un USO, una CATEGORÍA o PARA QUIÉN es: "algo para grabar videos", "necesito algo para la cocina", "es para mi mamá", "un regalo", "qué tienen para niños", "y de tecnología qué tienen?". Eso lo resuelve otro.
-Excepción: si además da un precio ("algo de unos 20 dólares"), buscar=true con ese precio y consulta=null.
+buscar=true, consulta=null y necesidad=true si NO nombra un producto concreto y en cambio describe una NECESIDAD, un USO, una CATEGORÍA o PARA QUIÉN es: "algo para grabar videos", "necesito algo para la cocina", "es para mi mamá", "un regalo", "qué tienen para niños", "y de tecnología qué tienen?".
 buscar=false si nombra DOS productos o más ("los audífonos y el aro de luz").
 
-consulta: las palabras del producto TAL COMO LAS DIJO, limpias y en singular, conservando el tipo o para qué es si lo dijo ("audífono bluetooth", "masajeador espalda"; no "unos audífonos buenos"). Nunca pongas un producto que el cliente no nombró.
+consulta: las palabras del producto TAL COMO LAS DIJO, limpias y en singular, conservando el tipo o para qué es si lo dijo ("audífono bluetooth", "masajeador espalda"; no "unos audífonos buenos"). Nunca pongas un producto que el cliente no nombró. Si pide "el más barato" DE algo que le acabamos de mencionar, consulta = ese algo.
 precio: si busca POR PRECIO ("algo de 20", "el más barato" = 0), ese número; si no, null.
 
-Responde SOLO este JSON, sin nada más: {"buscar": true|false, "consulta": "..."|null, "precio": número|null}`;
+Responde SOLO este JSON, sin nada más: {"buscar": true|false, "consulta": "..."|null, "precio": número|null, "necesidad": true|false}`;
+
+/**
+ * NECESIDAD → CATEGORÍA. «Algo para la cocina», «para niños de 5 años»: en un
+ * catálogo grande la búsqueda sin texto devuelve las categorías de la tienda;
+ * ~150 tokens eligen una y se lista lo que hay en ella. Sin esto el agente
+ * elegía un producto cualquiera y mandaba su folleto (pasadas 10 a 13).
+ */
+export const PROMPT_CATEGORIA = `Un cliente de una tienda describió lo que necesita, sin nombrar un producto. Elige de la lista la categoría de la tienda donde buscarlo. Si ninguna encaja, null.
+
+Responde SOLO este JSON: {"categoria": "<nombre exacto de la lista>"|null}`;
+
+export function mensajesParaCategoria({ cliente, categorias }) {
+  return [
+    { role: 'system', content: PROMPT_CATEGORIA },
+    { role: 'user', content: `El cliente escribió: "${String(cliente).slice(0, 300)}"\nCategorías: ${categorias.map((c) => `"${c}"`).join(', ')}` },
+  ];
+}
+
+/** La categoría elegida, solo si es una de la lista (tal cual). */
+export function leerCategoria(crudo, categorias = []) {
+  const m = /\{[\s\S]*\}/.exec(String(crudo || ''));
+  if (!m) return null;
+  let o;
+  try { o = JSON.parse(m[0]); } catch { return null; }
+  const t = typeof o?.categoria === 'string' ? o.categoria.trim() : '';
+  return categorias.find((c) => normalizar(c) === normalizar(t)) || null;
+}
+
+// «¿Qué venden?» a secas: se contesta con categorías o con lo destacado. Una
+// necesidad («algo para la cocina») no es esto.
+const PIDE_GENERAL = /^(hola |buenas |buenos dias |buenas tardes |buenas noches )*(que|cuales|cuáles) (productos |cosas |articulos )?(venden|tienen|hay|manejan|ofrecen)( ustedes| aqui| ahi)?\s*$|catalogo|muestrame (todo|lo que (tienen|venden))/;
+// «¿Cuál es el más barato?» tras ver una ficha o una lista: lo decide el
+// código con la búsqueda por precio, no la IA leyendo (pasada 12: dijo $25 con
+// uno de $19 delante).
+const PIDE_MAS_BARATO = /\b(mas|más) (barat\w*|economic\w*)\b|\bmenor precio\b|\bmas bajo\b/;
 
 /**
  * OTRO NOMBRE PARA LO MISMO. Cuando la búsqueda no trae nada disponible, el
@@ -163,7 +197,7 @@ export function leerDecision(crudo) {
   // volvería vacía. Sin consulta la tienda enseña sus categorías.
   if (consulta && /^(producto|productos|catalogo|todo|cosas|articulos|que venden|que tienen)$/.test(normalizar(consulta))) consulta = null;
   const precio = typeof o.precio === 'number' && Number.isFinite(o.precio) && o.precio >= 0 && o.precio < 1e6 ? o.precio : null;
-  return { buscar: o.buscar, consulta: consulta || null, precio };
+  return { buscar: o.buscar, consulta: consulta || null, precio, necesidad: o.necesidad === true };
 }
 
 /** Los mensajes para `redactar`: el prompt corto y una línea de contexto. */
@@ -203,6 +237,40 @@ export function seLlamaParecido(nombre, consulta) {
 }
 
 /**
+ * ¿El producto ES de ese tipo, o solo lo menciona? Un nombre de producto lleva
+ * su tipo entre las primeras palabras («Reloj militar…», «Eigiis Reloj…»); si
+ * lo pedido aparece recién al final («Bandeja molde de silicón protector
+ * FREIDORA»), es un accesorio o algo relacionado, no el producto. Pasadas 10 a
+ * 13: la bandeja se ofrecía como si fuera la freidora de aire.
+ */
+export function esDeEseTipo(nombre, consulta) {
+  const palabras = normalizar(consulta).split(' ').filter((p) => p.length >= 3 && !VACIAS.has(p));
+  if (!palabras.length) return false;
+  const [cabeza, ...resto] = palabras;
+  const todas = normalizar(nombre).split(' ').filter((p) => p.length >= 2 && !VACIAS.has(p));
+  const primeras = todas.slice(0, 3);
+  const lleva = (lista, w) => lista.some((p) => p.startsWith(raiz(w)));
+  // La palabra principal («parlante» en «parlante bluetooth») va al frente del
+  // nombre; o, si va al final («Bomba Carolina Herrera PERFUME»), otra de las
+  // pedidas va al frente («Bomba»). Un adjetivo suelto («bluetooth») no basta.
+  return lleva(primeras, cabeza) || (lleva(todas, cabeza) && resto.some((w) => lleva(primeras, w)));
+}
+
+/** Lo relacionado se ofrece como tal: ni «parecido» ni «lo más cercano». */
+export function textoRelacionados(consulta, productos) {
+  const lineas = productos.slice(0, 3).map((p) => {
+    const pr = precioDe(p);
+    return `• *${p.name}*${pr ? ` — ${pr.texto}` : ''}`;
+  });
+  return `${capitalizarInicio(consulta)} como tal no tengo por ahora. Relacionado con eso tengo:\n${lineas.join('\n')}\n\n¿Te muestro alguno?`;
+}
+
+function capitalizarInicio(s) {
+  const t = String(s || '').trim();
+  return t ? t[0].toUpperCase() + t.slice(1) : t;
+}
+
+/**
  * ¿El cliente está mirando opciones («¿qué audífonos tienen?», «tienes
  * relojes?») o ya pide uno («quiero los audífonos», «tienes el micrófono?»)?
  */
@@ -229,16 +297,18 @@ function precioDe(p) {
  * de dónde sale la lista: a «qué venden» no se le contesta «tengo estas
  * opciones» como si la tienda tuviera solo tres cosas.
  */
-export function listaDeOpciones(productos, { query = null, precio = null } = {}) {
+export function listaDeOpciones(productos, { query = null, precio = null, categoria = null } = {}) {
   const lineas = productos.slice(0, 3).map((p) => {
     const pr = precioDe(p);
     return `• *${p.name}*${pr ? ` — ${pr.texto}` : ''}`;
   });
-  const cabeza = query
-    ? 'Tengo estas opciones:'
-    : precio !== null
-      ? precio === 0 ? 'Lo más económico que tengo:' : 'Cerca de ese precio tengo:'
-      : 'Algunos de nuestros productos:';
+  const cabeza = categoria
+    ? 'Para eso tengo:'
+    : query
+      ? 'Tengo estas opciones:'
+      : precio !== null
+        ? precio === 0 ? 'Lo más económico que tengo:' : 'Cerca de ese precio tengo:'
+        : 'Algunos de nuestros productos:';
   return `${cabeza}\n${lineas.join('\n')}\n\n¿Cuál te muestro?`;
 }
 
@@ -263,27 +333,59 @@ export function turnoDeBusqueda(contexto) {
     }
     const r = resultados[0].resultado || {};
     if (r.ok !== true || !Array.isArray(r.products)) return actual(['búsqueda sin resultado válido']);
-    if (r.categorias) return actual(['catálogo grande: las categorías las nombra el actual']);
     const busquedas = busquedasDelTurno(mensajes);
     const conOtroNombre = busquedas.length > 1;
+    const pedido = resultados[0].argumentos || {};
+    const textoCliente = ultimoDelCliente(mensajes);
+    const nCliente = normalizar(textoCliente).replace(/\n/g, ' ').trim();
+    const esNecesidad = !pedido.query && typeof pedido.precio !== 'number' && !pedido.category && !PIDE_GENERAL.test(nCliente);
 
-    // Nada disponible que se llame como lo pedido (vacío, solo agotados, o
-    // cosas que solo lo mencionan en la descripción): antes de rendirse, otro
-    // nombre.
-    const consultaActual = resultados[0].argumentos?.query || null;
-    const nadaConEseNombre = consultaActual
-      ? !(r.products || []).some((p) => p && p.slug && p.available !== false && seLlamaParecido(p.name, consultaActual))
-      : !hayDisponibles(r);
-    if (nadaConEseNombre && (consultaActual || !hayDisponibles(r))) {
+    // ── Necesidad → categoría ─────────────────────────────────────────────
+    if (r.categorias) {
+      if (!esNecesidad) return actual(['catálogo grande: las categorías las nombra el actual']);
+      const categorias = r.categorias.filter((c) => typeof c === 'string' && c.trim());
+      if (contexto.resultadoModelo) {
+        const categoria = leerCategoria(contexto.resultadoModelo, categorias);
+        if (!categoria) return actual(['ninguna categoría encaja: lo lleva el actual']);
+        return { plan: { tipo: 'herramientas', llamadas: [{ nombre: 'search_products', argumentos: { category: categoria } }] }, porque: [`necesidad → categoría ${categoria}`] };
+      }
+      return { plan: { tipo: 'redactar', mensajes: mensajesParaCategoria({ cliente: textoCliente, categorias }) }, porque: ['necesidad: ¿qué categoría?'] };
+    }
+    if (esNecesidad) return actual(['necesidad en catálogo chico: lo lleva el actual']);
+
+    // Nada disponible que SEA lo pedido (vacío, solo agotados, o cosas que
+    // solo lo mencionan: la bandeja PARA freidora no es una freidora): antes
+    // de rendirse, otro nombre.
+    const consultaActual = pedido.query || null;
+    const vendibles = (r.products || []).filter((p) => p && p.slug && p.available !== false);
+    const nadaConEseNombre = consultaActual ? !vendibles.some((p) => esDeEseTipo(p.name, consultaActual)) : !vendibles.length;
+    if (nadaConEseNombre && typeof pedido.precio !== 'number') {
       const probadas = busquedas.map((b) => b.query).filter(Boolean);
-      if (!busquedas[0]?.query) return actual(['búsqueda general o por precio sin nada: lo dice el actual']);
-      if (busquedas.length - 1 >= MAX_OTROS_NOMBRES) return actual([`ni con otros nombres (${probadas.join(' / ')}): lo dice el actual`]);
+      if (!busquedas[0]?.query) return actual(['búsqueda general sin nada: lo dice el actual']);
+      // Lo relacionado que apareció en el turno (contiene la palabra pero no es
+      // el producto), para ofrecerlo como tal cuando no queden nombres.
+      const relacionados = [];
+      const vistos = new Set();
+      for (const b of busquedas) {
+        for (const p of (b.resultado?.products || [])) {
+          if (!p || !p.slug || p.available === false || vistos.has(p.slug)) continue;
+          if (busquedas[0].query && seLlamaParecido(p.name, busquedas[0].query) && !esDeEseTipo(p.name, busquedas[0].query)) { vistos.add(p.slug); relacionados.push(p); }
+        }
+      }
+      const rendirse = (porque) => {
+        if (!relacionados.length) return actual([...porque, 'lo dice el actual']);
+        const t = textoRelacionados(busquedas[0].query, relacionados);
+        const rev = revisar({ texto: t, contexto: { preciosPermitidos: relacionados.map((p) => precioDe(p)?.valor).filter((n) => n !== undefined && n !== null).map((n) => Number(n.toFixed(2))), numerosPermitidos: [], correosPermitidos: [], vecesDicho: (x) => vecesDicho(mensajes, x) } });
+        if (!rev.texto) return actual([...porque, 'relacionados no pasaron las guardias']);
+        return { plan: { tipo: 'texto', texto: rev.texto }, porque: [...porque, `relacionados: ${relacionados.length}`] };
+      };
+      if (busquedas.length - 1 >= MAX_OTROS_NOMBRES) return rendirse([`ni con otros nombres (${probadas.join(' / ')})`]);
       if (contexto.resultadoModelo) {
         const termino = leerOtroNombre(contexto.resultadoModelo, probadas);
-        if (!termino) return actual([`sin otro nombre para ${probadas.join(' / ')}`]);
+        if (!termino) return rendirse([`sin otro nombre para ${probadas.join(' / ')}`]);
         return { plan: { tipo: 'herramientas', llamadas: [{ nombre: 'search_products', argumentos: { query: termino } }] }, porque: [`otro nombre: ${termino}`] };
       }
-      return { plan: { tipo: 'redactar', mensajes: mensajesParaOtroNombre({ cliente: ultimoDelCliente(mensajes), probadas, pais: paisDelPrompt(systemDe(mensajes)) }) }, porque: [`nada disponible con ${probadas.join(' / ')}: ¿otro nombre?`] };
+      return { plan: { tipo: 'redactar', mensajes: mensajesParaOtroNombre({ cliente: textoCliente, probadas, pais: paisDelPrompt(systemDe(mensajes)) }) }, porque: [`nada disponible con ${probadas.join(' / ')}: ¿otro nombre?`] };
     }
     if ((r.agotados || []).length) return actual(['agotado, con parecidos disponibles: lo explica el actual']);
     // El mismo nombre dos veces es el mismo producto para el cliente (catálogos
@@ -298,7 +400,24 @@ export function turnoDeBusqueda(contexto) {
       return true;
     });
     if (!disponibles.length) return actual(['nada disponible: lo dice el actual con su alternativa']);
-    const pedido = resultados[0].argumentos || {};
+    // «El más barato»: lo decide el código. La plataforma ya los manda del más
+    // barato al más caro; se toma el de menor precio y va su ficha.
+    if (pedido.precio === 0) {
+      const conPrecio = disponibles.filter((p) => precioDe(p));
+      if (!conPrecio.length) return actual(['por precio sin precios: lo lleva el actual']);
+      const barato = conPrecio.reduce((a, b) => (precioDe(b).valor < precioDe(a).valor ? b : a));
+      if (fichasEnviadas(mensajes).has(String(barato.slug))) return actual([`el más barato (${barato.slug}) ya se enseñó: contesta el actual`]);
+      return { plan: { tipo: 'herramientas', llamadas: [{ nombre: 'send_product_card', argumentos: { productSlug: String(barato.slug) } }] }, porque: [`el más barato: ficha de ${barato.slug}`] };
+    }
+    // Por categoría (necesidad): lo que hay en ella, en lista.
+    if (pedido.category && !pedido.query) {
+      const elegidos = disponibles.slice(0, 3);
+      if (elegidos.length === 1) return { plan: { tipo: 'herramientas', llamadas: [{ nombre: 'send_product_card', argumentos: { productSlug: String(elegidos[0].slug) } }] }, porque: [`categoría ${pedido.category}: uno, ficha`] };
+      const t = listaDeOpciones(elegidos, { categoria: pedido.category });
+      const rev = revisar({ texto: t, contexto: { preciosPermitidos: elegidos.map((p) => precioDe(p)?.valor).filter((n) => n !== undefined && n !== null).map((n) => Number(n.toFixed(2))), numerosPermitidos: [], correosPermitidos: [], vecesDicho: (x) => vecesDicho(mensajes, x) } });
+      if (!rev.texto) return actual(['la lista por categoría no pasó las guardias']);
+      return { plan: { tipo: 'texto', texto: rev.texto }, porque: [`categoría ${pedido.category}: lista de ${elegidos.length}`] };
+    }
     // «quiero los audífonos»: si UNO solo se llama así, es ese. La búsqueda
     // también trae parecidos por descripción, y listarlos hacía elegir de
     // nuevo a quien ya había elegido (ronda 16, 1-nov-2026).
@@ -308,7 +427,7 @@ export function turnoDeBusqueda(contexto) {
     // se llaman así y luego lo que la búsqueda puso delante (los relojes se
     // llaman «Smart Watch», pasada 12).
     const parecidos = pedido.query ? disponibles.filter((p) => seLlamaParecido(p.name, pedido.query)) : disponibles;
-    const explora = !conOtroNombre && exploraOpciones(ultimoDelCliente(mensajes));
+    const explora = !conOtroNombre && exploraOpciones(textoCliente);
     let candidatos;
     if (explora && disponibles.length >= 2) candidatos = parecidos.length >= 2 ? [...new Set([...porNombre, ...parecidos])] : [...new Set([...parecidos, ...disponibles])];
     else if (porNombre.length) candidatos = porNombre;
@@ -355,6 +474,12 @@ export function turnoDeBusqueda(contexto) {
     // sirve para los dos; lo lleva el actual (ronda 16).
     if (d.consulta && /[,+;]|\s(y|e|o)\s/i.test(` ${d.consulta} `)) return actual(['nombra más de un producto']);
     const argumentos = {};
+    // Una necesidad se busca sin texto: la tienda devuelve sus categorías (si
+    // es grande) y se elige una. Con precio, por precio.
+    if (d.necesidad) {
+      if (d.precio !== null) argumentos.precio = d.precio;
+      return { plan: { tipo: 'herramientas', llamadas: [{ nombre: 'search_products', argumentos }] }, porque: [`necesidad: buscar ${JSON.stringify(argumentos)}`] };
+    }
     if (d.consulta) argumentos.query = d.consulta;
     if (d.precio !== null) argumentos.precio = d.precio;
     return { plan: { tipo: 'herramientas', llamadas: [{ nombre: 'search_products', argumentos }] }, porque: [`buscar ${JSON.stringify(argumentos)}`] };
@@ -365,8 +490,10 @@ export function turnoDeBusqueda(contexto) {
   if (NO_ES_CATALOGO.test(n)) return actual(['no es del catálogo (envío, pago, pedido, asesor…)']);
   if (/@|\d{7,}/.test(n)) return actual(['trae datos']);
   // Acaba de ver una ficha: lo que diga es sobre ese producto (cantidad,
-  // color, una duda) y lo contesta el actual, que lo tiene delante.
-  if (fichasDelUltimoTurno(mensajes).length) return actual(['contesta sobre la ficha que acaba de ver']);
+  // color, una duda) y lo contesta el actual, que lo tiene delante. Salvo
+  // «¿cuál es el más barato?», que es una búsqueda por precio y la decide el
+  // código.
+  if (fichasDelUltimoTurno(mensajes).length && !PIDE_MAS_BARATO.test(n)) return actual(['contesta sobre la ficha que acaba de ver']);
   return { plan: { tipo: 'redactar', mensajes: mensajesParaDecidir({ cliente, vendedor: ultimoDelVendedor(mensajes) }) }, porque: ['¿hay que buscar?'] };
 }
 
