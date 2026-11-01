@@ -186,6 +186,17 @@ export function seLlamaAsi(nombre, consulta) {
   return palabras.length > 0 && palabras.every((p) => n.includes(` ${raiz(p)}`));
 }
 
+/**
+ * ¿El nombre lleva al menos el sustantivo de lo pedido («parlante» de
+ * «parlante bluetooth»)? Más laxo que `seLlamaAsi`: decide si lo encontrado
+ * es de lo que pidió o solo lo menciona en la descripción («Lámpara LED…
+ * bluetooth» para «parlante bluetooth», tienda grande, pasada 10).
+ */
+export function seLlamaParecido(nombre, consulta) {
+  const nucleo = normalizar(consulta).split(' ').find((p) => p.length >= 3 && !VACIAS.has(p));
+  return !!nucleo && ` ${normalizar(nombre)} `.includes(` ${raiz(nucleo)}`);
+}
+
 /** El precio que se nombra en la lista: el más bajo, con «desde» si varía. */
 function precioDe(p) {
   const precios = (p.variants || []).map((v) => Number(v.price)).filter((n) => Number.isFinite(n) && n > 0);
@@ -238,8 +249,14 @@ export function turnoDeBusqueda(contexto) {
     const busquedas = busquedasDelTurno(mensajes);
     const conOtroNombre = busquedas.length > 1;
 
-    // Nada disponible (vacío, o solo agotados): antes de rendirse, otro nombre.
-    if (!hayDisponibles(r)) {
+    // Nada disponible que se llame como lo pedido (vacío, solo agotados, o
+    // cosas que solo lo mencionan en la descripción): antes de rendirse, otro
+    // nombre.
+    const consultaActual = resultados[0].argumentos?.query || null;
+    const nadaConEseNombre = consultaActual
+      ? !(r.products || []).some((p) => p && p.slug && p.available !== false && seLlamaParecido(p.name, consultaActual))
+      : !hayDisponibles(r);
+    if (nadaConEseNombre && (consultaActual || !hayDisponibles(r))) {
       const probadas = busquedas.map((b) => b.query).filter(Boolean);
       if (!busquedas[0]?.query) return actual(['búsqueda general o por precio sin nada: lo dice el actual']);
       if (busquedas.length - 1 >= MAX_OTROS_NOMBRES) return actual([`ni con otros nombres (${probadas.join(' / ')}): lo dice el actual`]);
