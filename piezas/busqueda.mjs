@@ -18,7 +18,7 @@
 //
 //   turnoDeBusqueda(contexto) → { plan, porque } | null   (null = no es mío)
 
-import { fichasDelUltimoTurno, resultadosRecientes, tieneHerramienta, textoDe, ultimoDe, ultimoDelCliente, ultimoDelVendedor, vecesDicho } from './contexto.mjs';
+import { fichasDelUltimoTurno, paisDelPrompt, resultadosRecientes, systemDe, tieneHerramienta, textoDe, ultimoDe, ultimoDelCliente, ultimoDelVendedor, vecesDicho } from './contexto.mjs';
 import { revisar } from './guardias.mjs';
 import { formatearPrecio, normalizar } from './texto.mjs';
 
@@ -45,7 +45,7 @@ buscar=false si NO nombra un producto concreto y en cambio describe una NECESIDA
 Excepción: si además da un precio ("algo de unos 20 dólares"), buscar=true con ese precio y consulta=null.
 buscar=false si nombra DOS productos o más ("los audífonos y el aro de luz").
 
-consulta: las palabras del producto TAL COMO LAS DIJO, limpias y en singular ("audífono bluetooth", no "unos audífonos buenos"). Nunca pongas un producto que el cliente no nombró.
+consulta: las palabras del producto TAL COMO LAS DIJO, limpias y en singular, conservando el tipo o para qué es si lo dijo ("audífono bluetooth", "masajeador espalda"; no "unos audífonos buenos"). Nunca pongas un producto que el cliente no nombró.
 precio: si busca POR PRECIO ("algo de 20", "el más barato" = 0), ese número; si no, null.
 
 Responde SOLO este JSON, sin nada más: {"buscar": true|false, "consulta": "..."|null, "precio": número|null}`;
@@ -102,10 +102,15 @@ function hayDisponibles(r) {
   return Array.isArray(r?.products) && r.products.some((p) => p && p.slug && p.available !== false);
 }
 
-export function mensajesParaOtroNombre({ cliente, probadas }) {
+const PAISES = { ve: 'Venezuela', ec: 'Ecuador', co: 'Colombia', mx: 'México', pe: 'Perú', cl: 'Chile', ar: 'Argentina', gt: 'Guatemala', pa: 'Panamá', py: 'Paraguay', bo: 'Bolivia', cr: 'Costa Rica', do: 'República Dominicana', es: 'España', us: 'Estados Unidos' };
+
+export function mensajesParaOtroNombre({ cliente, probadas, pais = null }) {
+  // El país cambia la palabra: en Venezuela el parlante es «corneta»; sin
+  // saberlo proponía «bocina» y salían unos lentes con bocinas (pasada 12).
+  const donde = PAISES[pais] ? `La tienda está en ${PAISES[pais]}: usa la palabra de allí. ` : '';
   return [
     { role: 'system', content: PROMPT_OTRO_NOMBRE },
-    { role: 'user', content: `El cliente escribió: "${String(cliente).slice(0, 300)}"\nYa se probó: ${probadas.map((p) => `"${p}"`).join(', ')}` },
+    { role: 'user', content: `${donde}El cliente escribió: "${String(cliente).slice(0, 300)}"\nYa se probó: ${probadas.map((p) => `"${p}"`).join(', ')}` },
   ];
 }
 
@@ -278,7 +283,7 @@ export function turnoDeBusqueda(contexto) {
         if (!termino) return actual([`sin otro nombre para ${probadas.join(' / ')}`]);
         return { plan: { tipo: 'herramientas', llamadas: [{ nombre: 'search_products', argumentos: { query: termino } }] }, porque: [`otro nombre: ${termino}`] };
       }
-      return { plan: { tipo: 'redactar', mensajes: mensajesParaOtroNombre({ cliente: ultimoDelCliente(mensajes), probadas }) }, porque: [`nada disponible con ${probadas.join(' / ')}: ¿otro nombre?`] };
+      return { plan: { tipo: 'redactar', mensajes: mensajesParaOtroNombre({ cliente: ultimoDelCliente(mensajes), probadas, pais: paisDelPrompt(systemDe(mensajes)) }) }, porque: [`nada disponible con ${probadas.join(' / ')}: ¿otro nombre?`] };
     }
     if ((r.agotados || []).length) return actual(['agotado, con parecidos disponibles: lo explica el actual']);
     // El mismo nombre dos veces es el mismo producto para el cliente (catálogos
@@ -299,11 +304,19 @@ export function turnoDeBusqueda(contexto) {
     // nuevo a quien ya había elegido (ronda 16, 1-nov-2026).
     const porNombre = pedido.query ? disponibles.filter((p) => seLlamaAsi(p.name, pedido.query)) : [];
     // Pero «¿QUÉ audífonos tienen?» pide ver las opciones, no que se elija por
-    // él (tienda grande, pasada 11): si explora y hay varios que se llaman así,
-    // va la lista de esos.
+    // él (tienda grande, pasada 11): si explora, va la lista — primero los que
+    // se llaman así y luego lo que la búsqueda puso delante (los relojes se
+    // llaman «Smart Watch», pasada 12).
     const parecidos = pedido.query ? disponibles.filter((p) => seLlamaParecido(p.name, pedido.query)) : disponibles;
     const explora = !conOtroNombre && exploraOpciones(ultimoDelCliente(mensajes));
-    const candidatos = explora && parecidos.length >= 2 ? parecidos : porNombre.length ? porNombre : parecidos.length ? parecidos : disponibles;
+    let candidatos;
+    if (explora && disponibles.length >= 2) candidatos = parecidos.length >= 2 ? [...new Set([...porNombre, ...parecidos])] : [...new Set([...parecidos, ...disponibles])];
+    else if (porNombre.length) candidatos = porNombre;
+    else if (!pedido.query) candidatos = disponibles;
+    // Nada se llama EXACTAMENTE como lo pidió: elegir por media palabra
+    // mandaba el masajeador de cuero cabelludo a quien pidió uno «para la
+    // espalda» (pasada 12). Elige el actual, que lee las descripciones.
+    else return actual(['ninguno se llama del todo así: elige el actual leyendo las descripciones']);
     // Encontrado con otro nombre: la ficha solo si UNO se llama así; lo demás
     // lo escribe el actual, que tiene delante lo que no había (o lo agotado)
     // y lo que sí, y sabe decir «eso no, pero tengo esto».

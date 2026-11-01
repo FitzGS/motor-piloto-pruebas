@@ -555,9 +555,28 @@ test('otro nombre: lo encontrado solo lo menciona en la descripción (no se llam
   assert.equal(motorConTraza(c).plan.tipo, 'redactar');
 });
 
-test('otro nombre: si alguno sí se llama así (aunque falte un adjetivo), no se pregunta', async () => {
+test('otro nombre: si alguno se llama a medias así (falta un adjetivo), no se pregunta otro nombre: elige el actual', async () => {
   const c = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('busco un parlante bluetooth'), m.llamada('search_products', { query: 'parlante bluetooth' }, ID_MOTOR), m.resultado({ ok: true, products: [producto('parlante-x', 'Parlante portátil X', 25)] }, ID_MOTOR)] });
-  assert.deepEqual((await motor(c)).llamadas, [{ nombre: 'send_product_card', argumentos: { productSlug: 'parlante-x' } }]);
+  assert.deepEqual(await motor(c), { tipo: 'actual' });
+});
+
+test('ficha directa solo si el nombre lleva TODO lo pedido: «masajeador espalda» no manda el de cuero cabelludo', async () => {
+  const c = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('quiero 2 masajeadores para la espalda'), m.llamada('search_products', { query: 'masajeador espalda' }, ID_MOTOR), m.resultado({ ok: true, products: [producto('arana', 'Masajeador de cuero cabelludo tipo araña', 5), producto('pistola', 'Pistola de masaje muscular', 30)] }, ID_MOTOR)] });
+  assert.deepEqual(await motor(c), { tipo: 'actual' });
+});
+
+test('mirar opciones con nombres en inglés: «tienen relojes inteligentes?» lista aunque solo uno diga «reloj»', async () => {
+  const productos = [producto('militar', 'Reloj militar inteligente', 18), producto('t900', 'T900 Ultra 2 Smart Watch', 25), producto('t800', 'T800 Smart Watch', 19)];
+  const c = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('tienen relojes inteligentes?'), m.llamada('search_products', { query: 'reloj inteligente' }, ID_MOTOR), m.resultado({ ok: true, products: productos }, ID_MOTOR)] });
+  const r = await motor(c);
+  assert.equal(r.tipo, 'texto');
+  assert.match(r.texto, /Reloj militar/);
+  assert.match(r.texto, /Smart Watch/);
+});
+
+test('otro nombre: la pregunta lleva el país de la tienda', async () => {
+  const c = contextoFalso({ system: { pais: 'VE' }, borrador: sinCarrito, historial: [m.cliente('busco un parlante'), m.llamada('search_products', { query: 'parlante' }, ID_MOTOR), m.resultado(vacio, ID_MOTOR)] });
+  assert.match(motorConTraza(c).plan.mensajes[1].content, /La tienda está en Venezuela/);
 });
 
 test('mirar opciones vs pedir uno: «¿qué audífonos tienen?» lista los que se llaman así; «quiero los audífonos» va a la ficha', async () => {
