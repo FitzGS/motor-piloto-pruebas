@@ -50,6 +50,77 @@ precio: si busca POR PRECIO ("algo de 20", "el más barato" = 0), ese número; s
 
 Responde SOLO este JSON, sin nada más: {"buscar": true|false, "consulta": "..."|null, "precio": número|null}`;
 
+/**
+ * OTRO NOMBRE PARA LO MISMO. Cuando la búsqueda no trae nada disponible, el
+ * agente decía «no lo tenemos» teniendo el producto con otra palabra
+ * («parlante» → las cornetas) u ofrecía cualquier cosa (cámara wifi agotada →
+ * luces LED). Antes de rendirse, el motor pide UN nombre alternativo y lo
+ * busca; hasta dos veces.
+ */
+export const PROMPT_OTRO_NOMBRE = `Un cliente de una tienda pidió un producto y la búsqueda en el catálogo no encontró nada disponible con las palabras que se probaron. Propón UNA forma distinta de llamar a ese MISMO tipo de producto, como suele aparecer en el nombre de un producto de tienda online en Latinoamérica.
+
+Ejemplos: parlante → corneta; bocina → corneta; audífonos → auriculares; cámara wifi → cámara ip; franela → camiseta; tenis → zapatos deportivos.
+
+Reglas:
+- Un sustantivo y como mucho una palabra más. Sin marcas.
+- El MISMO tipo de producto, nunca otro distinto ("cámara de seguridad" no es "lámpara").
+- No repitas ninguna de las palabras ya probadas.
+- Si no hay otra forma razonable de llamarlo, null.
+
+Responde SOLO este JSON: {"termino": "..."|null}`;
+
+export const MAX_OTROS_NOMBRES = 2;
+
+/**
+ * Las búsquedas que el motor hizo en ESTE turno (desde el último mensaje del
+ * cliente), con lo que trajeron: [{ query, precio, resultado }].
+ */
+export function busquedasDelTurno(mensajes) {
+  const lista = mensajes || [];
+  let i = lista.length - 1;
+  while (i >= 0 && lista[i]?.role !== 'user') i--;
+  const resultados = new Map();
+  for (const m of lista.slice(i + 1)) {
+    if (m?.role !== 'tool') continue;
+    try { resultados.set(m.tool_call_id, JSON.parse(textoDe(m))); } catch { resultados.set(m.tool_call_id, null); }
+  }
+  const busquedas = [];
+  for (const m of lista.slice(i + 1)) {
+    if (m?.role !== 'assistant') continue;
+    for (const tc of m.tool_calls || []) {
+      if (tc?.function?.name !== 'search_products' || !ID_DEL_MOTOR.test(String(tc.id || ''))) continue;
+      let a = {};
+      try { a = JSON.parse(tc.function.arguments || '{}'); } catch {}
+      busquedas.push({ query: a.query || null, precio: typeof a.precio === 'number' ? a.precio : null, resultado: resultados.get(tc.id) || null });
+    }
+  }
+  return busquedas;
+}
+
+/** ¿El resultado de una búsqueda trae algo que se pueda vender ya? */
+function hayDisponibles(r) {
+  return Array.isArray(r?.products) && r.products.some((p) => p && p.slug && p.available !== false);
+}
+
+export function mensajesParaOtroNombre({ cliente, probadas }) {
+  return [
+    { role: 'system', content: PROMPT_OTRO_NOMBRE },
+    { role: 'user', content: `El cliente escribió: "${String(cliente).slice(0, 300)}"\nYa se probó: ${probadas.map((p) => `"${p}"`).join(', ')}` },
+  ];
+}
+
+/** La respuesta del prompt de otro nombre. Lo raro, vacío o repetido → null. */
+export function leerOtroNombre(crudo, probadas = []) {
+  const m = /\{[\s\S]*\}/.exec(String(crudo || ''));
+  if (!m) return null;
+  let o;
+  try { o = JSON.parse(m[0]); } catch { return null; }
+  const t = typeof o?.termino === 'string' ? o.termino.trim().slice(0, 60) : '';
+  if (!t || /[,;+]/.test(t) || t.split(/\s+/).length > 3) return null;
+  if (probadas.some((p) => normalizar(p) === normalizar(t))) return null;
+  return t;
+}
+
 /** Los productos que ya se enseñaron en todo el chat (no se repite la ficha). */
 export function fichasEnviadas(mensajes) {
   const slugs = new Set();
@@ -164,7 +235,22 @@ export function turnoDeBusqueda(contexto) {
     const r = resultados[0].resultado || {};
     if (r.ok !== true || !Array.isArray(r.products)) return actual(['búsqueda sin resultado válido']);
     if (r.categorias) return actual(['catálogo grande: las categorías las nombra el actual']);
-    if ((r.agotados || []).length) return actual(['agotado: lo explica el actual con su alternativa']);
+    const busquedas = busquedasDelTurno(mensajes);
+    const conOtroNombre = busquedas.length > 1;
+
+    // Nada disponible (vacío, o solo agotados): antes de rendirse, otro nombre.
+    if (!hayDisponibles(r)) {
+      const probadas = busquedas.map((b) => b.query).filter(Boolean);
+      if (!busquedas[0]?.query) return actual(['búsqueda general o por precio sin nada: lo dice el actual']);
+      if (busquedas.length - 1 >= MAX_OTROS_NOMBRES) return actual([`ni con otros nombres (${probadas.join(' / ')}): lo dice el actual`]);
+      if (contexto.resultadoModelo) {
+        const termino = leerOtroNombre(contexto.resultadoModelo, probadas);
+        if (!termino) return actual([`sin otro nombre para ${probadas.join(' / ')}`]);
+        return { plan: { tipo: 'herramientas', llamadas: [{ nombre: 'search_products', argumentos: { query: termino } }] }, porque: [`otro nombre: ${termino}`] };
+      }
+      return { plan: { tipo: 'redactar', mensajes: mensajesParaOtroNombre({ cliente: ultimoDelCliente(mensajes), probadas }) }, porque: [`nada disponible con ${probadas.join(' / ')}: ¿otro nombre?`] };
+    }
+    if ((r.agotados || []).length) return actual(['agotado, con parecidos disponibles: lo explica el actual']);
     // El mismo nombre dos veces es el mismo producto para el cliente (catálogos
     // importados con duplicados): una lista con tres «Bomba Carolina Herrera»
     // no deja elegir nada (tienda grande, pasada 8). Se queda el primero.
@@ -183,6 +269,10 @@ export function turnoDeBusqueda(contexto) {
     // nuevo a quien ya había elegido (ronda 16, 1-nov-2026).
     const porNombre = pedido.query ? disponibles.filter((p) => seLlamaAsi(p.name, pedido.query)) : [];
     const candidatos = porNombre.length ? porNombre : disponibles;
+    // Encontrado con otro nombre: la ficha solo si UNO se llama así; lo demás
+    // lo escribe el actual, que tiene delante lo que no había (o lo agotado)
+    // y lo que sí, y sabe decir «eso no, pero tengo esto».
+    if (conOtroNombre && !(porNombre.length === 1)) return actual(['encontrado con otro nombre: lo presenta el actual']);
     if (candidatos.length === 1) {
       const slug = String(candidatos[0].slug);
       if (fichasEnviadas(mensajes).has(slug)) return actual([`${slug} ya se enseñó: contesta el actual`]);

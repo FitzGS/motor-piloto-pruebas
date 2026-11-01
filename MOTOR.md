@@ -13,7 +13,9 @@ al agente actual con `{ tipo: 'actual' }`.
 | Con esa decisión | `herramientas`: `search_products` con la consulta o el precio |
 | La búsqueda del motor trae UN disponible | `herramientas`: `send_product_card`; luego escribe el actual (una entrada en vez de tres) |
 | Trae varios | `texto`: lista corta por código (hasta 3, nombre y precio) y «¿Cuál te muestro?» |
-| Agotado, nada, categorías, ficha ya enseñada, o la búsqueda la pidió el actual | `actual`, que ya tiene el resultado delante |
+| La búsqueda no trae nada disponible (vacía o solo agotados) | `redactar`: ~215 tokens piden UN nombre alternativo del mismo producto (parlante → corneta) y se busca; hasta dos veces antes de ceder |
+| Encontrado con otro nombre | ficha si uno solo se llama así; si no, `actual` («eso no, pero tengo esto») |
+| Categorías, ficha ya enseñada, agotado con parecidos disponibles, o la búsqueda la pidió el actual | `actual`, que ya tiene el resultado delante |
 | Carrito con items y el cliente dice que sí a «¿te lo despacho?», «lo quiero», «hagamos el pedido» | `texto`: la lista de datos que faltan, en UN solo mensaje, con los ejemplos del país |
 | El cliente manda datos (con etiqueta, en varias líneas, o la respuesta a la pregunta de UN dato) | `herramientas`: una sola `set_customer_info` con TODO lo que trajo el mensaje |
 | Tras guardar, aún faltan datos | `texto`: pide SOLO lo que falta |
