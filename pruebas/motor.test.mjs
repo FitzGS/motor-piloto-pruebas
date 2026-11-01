@@ -559,3 +559,21 @@ test('otro nombre: si alguno sí se llama así (aunque falte un adjetivo), no se
   const c = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('busco un parlante bluetooth'), m.llamada('search_products', { query: 'parlante bluetooth' }, ID_MOTOR), m.resultado({ ok: true, products: [producto('parlante-x', 'Parlante portátil X', 25)] }, ID_MOTOR)] });
   assert.deepEqual((await motor(c)).llamadas, [{ nombre: 'send_product_card', argumentos: { productSlug: 'parlante-x' } }]);
 });
+
+test('mirar opciones vs pedir uno: «¿qué audífonos tienen?» lista los que se llaman así; «quiero los audífonos» va a la ficha', async () => {
+  const productos = [producto('a31', 'Audifonos A31', 7), producto('clip', 'Audífonos de clip', 20), producto('mic', 'Micrófono solapa', 35)];
+  const turno = (texto) => contextoFalso({ borrador: sinCarrito, historial: [m.cliente(texto), m.llamada('search_products', { query: 'audífono' }, ID_MOTOR), m.resultado({ ok: true, products: productos }, ID_MOTOR)] });
+  const lista = await motor(turno('qué audífonos tienen?'));
+  assert.equal(lista.tipo, 'texto');
+  assert.match(lista.texto, /Audifonos A31/);
+  assert.match(lista.texto, /Audífonos de clip/);
+  assert.doesNotMatch(lista.texto, /Micrófono/);
+  assert.equal((await motor(turno('tienes audífonos?'))).tipo, 'texto');
+  assert.equal((await motor(turno('quiero los audífonos'))).tipo, 'texto', 'dos se llaman así: lista también');
+});
+
+test('mirar opciones: frases', async () => {
+  const { exploraOpciones } = await import('../piezas/busqueda.mjs');
+  for (const t of ['qué audífonos tienen?', 'tienes relojes?', 'cuáles relojes hay', 'qué modelos de licuadora manejan']) assert.equal(exploraOpciones(t), true, t);
+  for (const t of ['quiero los audífonos', 'tienes el micrófono?', 'me llevo la licuadora', 'tienen un parlante bluetooth?']) assert.equal(exploraOpciones(t), false, t);
+});

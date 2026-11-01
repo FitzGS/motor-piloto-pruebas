@@ -197,6 +197,19 @@ export function seLlamaParecido(nombre, consulta) {
   return !!nucleo && ` ${normalizar(nombre)} `.includes(` ${raiz(nucleo)}`);
 }
 
+/**
+ * ¿El cliente está mirando opciones («¿qué audífonos tienen?», «tienes
+ * relojes?») o ya pide uno («quiero los audífonos», «tienes el micrófono?»)?
+ */
+export function exploraOpciones(texto) {
+  const n = normalizar(texto);
+  if (/\b(quiero|dame|me llevo|me lo llevo|me la llevo|mandame|enviame|lo quiero|la quiero)\b/.test(n)) return false;
+  if (/\b(que|cuales)\b.{0,40}\b(tienen|tienes|tiene|hay|venden|vendes|manejan|manejas|ofrecen)\b/.test(n)) return true;
+  if (/\b(opciones|modelos|variedad)\b/.test(n)) return true;
+  const m = /\b(tienen|tienes|hay|venden|vendes|manejan|manejas)\s+(\w+)/.exec(n);
+  return !!m && !['el', 'la', 'ese', 'esa', 'este', 'esta', 'un', 'una'].includes(m[2]);
+}
+
 /** El precio que se nombra en la lista: el más bajo, con «desde» si varía. */
 function precioDe(p) {
   const precios = (p.variants || []).map((v) => Number(v.price)).filter((n) => Number.isFinite(n) && n > 0);
@@ -285,7 +298,12 @@ export function turnoDeBusqueda(contexto) {
     // también trae parecidos por descripción, y listarlos hacía elegir de
     // nuevo a quien ya había elegido (ronda 16, 1-nov-2026).
     const porNombre = pedido.query ? disponibles.filter((p) => seLlamaAsi(p.name, pedido.query)) : [];
-    const candidatos = porNombre.length ? porNombre : disponibles;
+    // Pero «¿QUÉ audífonos tienen?» pide ver las opciones, no que se elija por
+    // él (tienda grande, pasada 11): si explora y hay varios que se llaman así,
+    // va la lista de esos.
+    const parecidos = pedido.query ? disponibles.filter((p) => seLlamaParecido(p.name, pedido.query)) : disponibles;
+    const explora = !conOtroNombre && exploraOpciones(ultimoDelCliente(mensajes));
+    const candidatos = explora && parecidos.length >= 2 ? parecidos : porNombre.length ? porNombre : parecidos.length ? parecidos : disponibles;
     // Encontrado con otro nombre: la ficha solo si UNO se llama así; lo demás
     // lo escribe el actual, que tiene delante lo que no había (o lo agotado)
     // y lo que sí, y sabe decir «eso no, pero tengo esto».
