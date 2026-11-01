@@ -448,6 +448,39 @@ test('búsqueda C: el encabezado dice de dónde sale la lista (general, por prec
 
 test('búsqueda A: el prompt de decidir no deja inventar productos ni buscar necesidades', () => {
   assert.match(PROMPT_DECIDIR, /Nunca pongas un producto que el cliente no nombró/);
-  assert.match(PROMPT_DECIDIR, /NECESIDAD sin nombrar el producto/);
+  assert.match(PROMPT_DECIDIR, /describe una NECESIDAD, un USO, una CATEGORÍA/);
   assert.match(PROMPT_DECIDIR, /EN GENERAL qué venden/);
+});
+
+test('búsqueda C: nombres repetidos cuentan una vez (catálogos con duplicados) → ficha, no lista', async () => {
+  const c = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('tienen el perfume bomba?'), m.llamada('search_products', { query: 'perfume bomba' }, ID_MOTOR), m.resultado({ ok: true, products: [producto('bomba-1', 'Bomba Carolina Herrera perfume', 48), producto('bomba-2', 'Bomba  carolina herrera Perfume', 48), producto('bomba-3', 'Bomba Carolina Herrera perfume', 50)] }, ID_MOTOR)] });
+  assert.deepEqual(await motor(c), { tipo: 'herramientas', llamadas: [{ nombre: 'send_product_card', argumentos: { productSlug: 'bomba-1' } }] });
+});
+
+test('búsqueda A: el prompt manda al actual las necesidades, categorías y para quién es', () => {
+  assert.match(PROMPT_DECIDIR, /necesito algo para la cocina/);
+  assert.match(PROMPT_DECIDIR, /es para mi mamá/);
+  assert.match(PROMPT_DECIDIR, /de tecnología qué tienen/);
+});
+
+test('búsqueda C: «quiero los audífonos» y solo uno se llama así → su ficha, no la lista', async () => {
+  const productos = [producto('audifonos-a31', 'Audifonos A31', 7), producto('microfono', 'Micrófono solapa', 35), producto('cargador', 'Cargador 3 en 1', 35)];
+  const c = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('quiero los audífonos'), m.llamada('search_products', { query: 'audífono' }, ID_MOTOR), m.resultado({ ok: true, products: productos, variasOpciones: '...' }, ID_MOTOR)] });
+  assert.deepEqual((await motor(c)).llamadas, [{ nombre: 'send_product_card', argumentos: { productSlug: 'audifonos-a31' } }]);
+});
+
+test('búsqueda C: varios con ese nombre → la lista es solo de esos', async () => {
+  const productos = [producto('a1', 'Audífonos A31', 7), producto('x', 'Lámpara LED', 2), producto('a2', 'Audífonos de clip', 20)];
+  const c = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('tienes audífonos?'), m.llamada('search_products', { query: 'audífonos' }, ID_MOTOR), m.resultado({ ok: true, products: productos }, ID_MOTOR)] });
+  const t = (await motor(c)).texto;
+  assert.match(t, /Audífonos A31/);
+  assert.match(t, /Audífonos de clip/);
+  assert.doesNotMatch(t, /Lámpara/);
+});
+
+test('búsqueda B: dos productos en la consulta → actual', async () => {
+  for (const consulta of ['audífono, aro de luz', 'audífono y aro de luz']) {
+    const c = contextoFalso({ borrador: sinCarrito, historial: [m.cliente('quiero los audífonos y el aro de luz')], resultadoModelo: JSON.stringify({ buscar: true, consulta, precio: null }) });
+    assert.deepEqual(await motor(c), { tipo: 'actual' }, consulta);
+  }
 });

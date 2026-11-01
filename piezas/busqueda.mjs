@@ -39,9 +39,11 @@ const NO_ES_CATALOGO = /\b(envio|envios|enviar|flete|delivery|despach\w*|tarda|d
 export const PROMPT_DECIDIR = `Decides UNA cosa: si para contestarle a este cliente de una tienda hay que buscar en el catálogo, y con qué palabras. No le contestas al cliente.
 
 buscar=true si NOMBRA un producto (audífonos, reloj, faja…) y pregunta si lo hay, su precio, colores, tallas o fotos, o dice que lo quiere.
-buscar=true y consulta=null si pregunta EN GENERAL qué venden o qué tienen, o pide ver el catálogo.
+buscar=true y consulta=null si pregunta EN GENERAL qué venden o qué tienen, sin más, o pide ver el catálogo.
 buscar=false si saluda, agradece, dicta sus datos, confirma o rechaza algo, contesta una cantidad, reclama, o pregunta por el envío, el pago o un pedido.
-buscar=false si describe una NECESIDAD sin nombrar el producto ("algo para grabar videos", "un regalo para mi mamá"): eso lo resuelve otro.
+buscar=false si NO nombra un producto concreto y en cambio describe una NECESIDAD, un USO, una CATEGORÍA o PARA QUIÉN es: "algo para grabar videos", "necesito algo para la cocina", "es para mi mamá", "un regalo", "qué tienen para niños", "y de tecnología qué tienen?". Eso lo resuelve otro.
+Excepción: si además da un precio ("algo de unos 20 dólares"), buscar=true con ese precio y consulta=null.
+buscar=false si nombra DOS productos o más ("los audífonos y el aro de luz").
 
 consulta: las palabras del producto TAL COMO LAS DIJO, limpias y en singular ("audífono bluetooth", no "unos audífonos buenos"). Nunca pongas un producto que el cliente no nombró.
 precio: si busca POR PRECIO ("algo de 20", "el más barato" = 0), ese número; si no, null.
@@ -97,6 +99,22 @@ export function mensajesParaDecidir({ cliente, vendedor }) {
   ];
 }
 
+// La raíz de una palabra, como la búsqueda de la plataforma: «audífonos» y
+// «audífono» casan con «Audifonos A31».
+function raiz(palabra) {
+  if (palabra.length >= 6) return palabra.slice(0, palabra.length - 2);
+  if (palabra.length === 5) return palabra.slice(0, 4);
+  return palabra;
+}
+const VACIAS = new Set(['de', 'del', 'la', 'el', 'los', 'las', 'un', 'una', 'con', 'para', 'por', 'en', 'y']);
+
+/** ¿El nombre del producto lleva todas las palabras de lo que pidió? */
+export function seLlamaAsi(nombre, consulta) {
+  const n = ` ${normalizar(nombre)} `;
+  const palabras = normalizar(consulta).split(' ').filter((p) => p.length >= 3 && !VACIAS.has(p));
+  return palabras.length > 0 && palabras.every((p) => n.includes(` ${raiz(p)}`));
+}
+
 /** El precio que se nombra en la lista: el más bajo, con «desde» si varía. */
 function precioDe(p) {
   const precios = (p.variants || []).map((v) => Number(v.price)).filter((n) => Number.isFinite(n) && n > 0);
@@ -147,15 +165,30 @@ export function turnoDeBusqueda(contexto) {
     if (r.ok !== true || !Array.isArray(r.products)) return actual(['búsqueda sin resultado válido']);
     if (r.categorias) return actual(['catálogo grande: las categorías las nombra el actual']);
     if ((r.agotados || []).length) return actual(['agotado: lo explica el actual con su alternativa']);
-    const disponibles = r.products.filter((p) => p && p.slug && p.available !== false);
+    // El mismo nombre dos veces es el mismo producto para el cliente (catálogos
+    // importados con duplicados): una lista con tres «Bomba Carolina Herrera»
+    // no deja elegir nada (tienda grande, pasada 8). Se queda el primero.
+    const nombres = new Set();
+    const disponibles = r.products.filter((p) => {
+      if (!p || !p.slug || p.available === false) return false;
+      const clave = normalizar(p.name);
+      if (nombres.has(clave)) return false;
+      nombres.add(clave);
+      return true;
+    });
     if (!disponibles.length) return actual(['nada disponible: lo dice el actual con su alternativa']);
-    if (disponibles.length === 1) {
-      const slug = String(disponibles[0].slug);
-      if (fichasEnviadas(mensajes).has(slug)) return actual([`${slug} ya se enseñó: contesta el actual`]);
-      return { plan: { tipo: 'herramientas', llamadas: [{ nombre: 'send_product_card', argumentos: { productSlug: slug } }] }, porque: [`uno disponible: ficha de ${slug}`] };
-    }
-    const elegidos = disponibles.slice(0, 3);
     const pedido = resultados[0].argumentos || {};
+    // «quiero los audífonos»: si UNO solo se llama así, es ese. La búsqueda
+    // también trae parecidos por descripción, y listarlos hacía elegir de
+    // nuevo a quien ya había elegido (ronda 16, 1-nov-2026).
+    const porNombre = pedido.query ? disponibles.filter((p) => seLlamaAsi(p.name, pedido.query)) : [];
+    const candidatos = porNombre.length ? porNombre : disponibles;
+    if (candidatos.length === 1) {
+      const slug = String(candidatos[0].slug);
+      if (fichasEnviadas(mensajes).has(slug)) return actual([`${slug} ya se enseñó: contesta el actual`]);
+      return { plan: { tipo: 'herramientas', llamadas: [{ nombre: 'send_product_card', argumentos: { productSlug: slug } }] }, porque: [`uno ${porNombre.length ? 'con ese nombre' : 'disponible'}: ficha de ${slug}`] };
+    }
+    const elegidos = candidatos.slice(0, 3);
     const t = listaDeOpciones(elegidos, { query: pedido.query || null, precio: typeof pedido.precio === 'number' ? pedido.precio : null });
     const rev = revisar({
       texto: t,
@@ -180,6 +213,9 @@ export function turnoDeBusqueda(contexto) {
     const d = leerDecision(contexto.resultadoModelo);
     if (!d) return actual(['la decisión de buscar no se pudo leer']);
     if (!d.buscar) return actual(['no hay que buscar']);
+    // Dos productos en un mensaje («los audífonos y el aro»): una búsqueda no
+    // sirve para los dos; lo lleva el actual (ronda 16).
+    if (d.consulta && /[,+;]|\s(y|e|o)\s/i.test(` ${d.consulta} `)) return actual(['nombra más de un producto']);
     const argumentos = {};
     if (d.consulta) argumentos.query = d.consulta;
     if (d.precio !== null) argumentos.precio = d.precio;
