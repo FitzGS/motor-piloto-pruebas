@@ -153,7 +153,7 @@ test('tras set_customer_info con todo → previsualización con total y UNA preg
   assert.match(r.plan.texto, /2× Combo de ligas — \$39,99/);
   assert.match(r.plan.texto, /Total: \$39,99/);
   assert.match(r.plan.texto, /Quito, Pichincha/);
-  assert.match(r.plan.texto, /¿Confirmas el pedido\?/);
+  assert.match(r.plan.texto, /¿Todo bien así\?/);
   assert.equal((r.plan.texto.match(/\?/g) || []).length, 1);
 });
 

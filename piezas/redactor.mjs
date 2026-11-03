@@ -96,12 +96,13 @@ export function preview({ borrador, pais }) {
   else if (d.customerAddress) lineas.push(`Dirección: ${d.customerAddress}`);
   if (d.customerCity) lineas.push(`Ciudad: ${d.customerCity}${d.customerState ? `, ${d.customerState}` : ''}`);
   if (d.customerReference) lineas.push(`Referencia: ${d.customerReference}`);
-  lineas.push('', '¿Confirmas el pedido? Responde *sí* y lo registro.');
+  // Fitz, 3-nov-2026: «Responde *sí* y lo registro» sonaba a formulario.
+  lineas.push('', '¿Todo bien así? Si me confirmas, te lo despacho 🚚');
   return lineas.join('\n');
 }
 
 /** El marcador que deja la previsualización, para saber que se mostró. */
-export const PREGUNTA_CONFIRMAR = /¿confirmas el pedido\?/i;
+export const PREGUNTA_CONFIRMAR = /¿todo bien así\?|¿confirmas el pedido\?/i;
 
 export function cambioTrasNo() {
   return 'Sin problema 🙂 ¿Qué quieres cambiar: el producto, la cantidad o algún dato de entrega?';
